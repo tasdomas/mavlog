@@ -272,3 +272,87 @@ impl Session {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tlog::LogEntry;
+
+    fn entry(ts_us: u64, sysid: u8, name: &str) -> LogEntry {
+        LogEntry {
+            timestamp_us: ts_us,
+            sysid,
+            compid: 1,
+            msg_id: 0,
+            version: mavlink::MavlinkVersion::V2,
+            payload: 0..0,
+            name: name.to_string(),
+        }
+    }
+
+    fn session(path: &str) -> Session {
+        let entries = vec![
+            entry(1_000_000, 1, "HEARTBEAT"),
+            entry(2_000_000, 1, "ATTITUDE"),
+            entry(3_000_000, 2, "HEARTBEAT"),
+            entry(4_000_000, 1, "VFR_HUD"),
+        ];
+        Session::new(path.to_string(), Vec::new(), entries)
+    }
+
+    #[test]
+    fn id_and_type_options_are_sorted_and_deduped() {
+        let s = session("x");
+        assert_eq!(s.id_options, vec![(1, 1), (2, 1)]);
+        assert_eq!(
+            s.type_options,
+            vec!["ATTITUDE".to_string(), "HEARTBEAT".to_string(), "VFR_HUD".to_string()]
+        );
+    }
+
+    #[test]
+    fn apply_filter_narrows_and_preserves_selection() {
+        let mut s = session("x");
+        s.selected = 3; // VFR_HUD
+        s.filters = parse_filters("=HEARTBEAT").unwrap();
+        s.apply_filter();
+        assert_eq!(s.filtered, vec![0, 2]);
+        // Selection moves to the nearest surviving entry at or before the old.
+        assert_eq!(s.selected_entry_index(), Some(2));
+    }
+
+    #[test]
+    fn jump_to_time_selects_first_at_or_after() {
+        let mut s = session("x");
+        s.jump_to_time(2_500_000);
+        assert_eq!(s.selected_entry_index(), Some(2)); // ts 3_000_000
+    }
+
+    #[test]
+    fn setup_roundtrips_through_sidecar() {
+        let path = std::env::temp_dir()
+            .join(format!("mavlog-test-{}.tlog", std::process::id()));
+        let path = path.to_str().unwrap().to_string();
+
+        let mut s = session(&path);
+        s.time_format = TimeFormat::OffsetSecs;
+        s.filters = parse_filters("=HEARTBEAT").unwrap();
+        s.rebuild_filter_text();
+        s.apply_filter();
+        s.marks.insert(2, "mark2".to_string());
+        s.marks.insert(999, "out of range".to_string()); // dropped on load
+        s.selected = 1; // filtered[1] == entry 2
+        s.save_setup().unwrap();
+
+        let mut restored = session(&path);
+        assert!(restored.load_setup().unwrap().starts_with("Loaded setup"));
+        assert_eq!(restored.time_format, TimeFormat::OffsetSecs);
+        assert_eq!(restored.filter_text, "=HEARTBEAT");
+        assert_eq!(restored.filtered, vec![0, 2]);
+        assert_eq!(restored.marks.get(&2).map(String::as_str), Some("mark2"));
+        assert!(!restored.marks.contains_key(&999));
+        assert_eq!(restored.selected_entry_index(), Some(2));
+
+        let _ = std::fs::remove_file(setup_path(&path));
+    }
+}
