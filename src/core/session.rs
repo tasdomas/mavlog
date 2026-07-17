@@ -5,6 +5,7 @@ use std::collections::HashMap;
 
 use crate::core::column::{parse_columns, CustomColumn};
 use crate::core::filter::{parse_filters, FilterExpr};
+use crate::core::plot::PlotDef;
 use crate::core::setup::{setup_path, Setup};
 use crate::core::time::{format_datetime, format_offset, TimeFormat};
 use crate::tlog;
@@ -32,6 +33,8 @@ pub struct Session {
     pub type_options: Vec<String>,
     /// Index into `filtered` of the selected message.
     pub selected: usize,
+    /// Saved plot definitions (GUI-only; the TUI never reads this).
+    pub plots: Vec<PlotDef>,
 }
 
 impl Session {
@@ -59,6 +62,7 @@ impl Session {
             filters: Vec::new(),
             filter_text: String::new(),
             selected: 0,
+            plots: Vec::new(),
         }
     }
 
@@ -232,6 +236,7 @@ impl Session {
             marks: self.marks.iter().map(|(&i, l)| (i, l.clone())).collect(),
             selected: self.filtered.get(self.selected).copied().unwrap_or(0),
             columns: self.columns_text.clone(),
+            plots: self.plots.clone(),
         };
         let path = setup_path(&self.path);
         let json = serde_json::to_string_pretty(&setup).expect("setup serializes");
@@ -261,6 +266,7 @@ impl Session {
                 if let Ok(columns) = parse_columns(&setup.columns) {
                     self.set_columns(columns);
                 }
+                self.plots = setup.plots;
                 self.apply_filter();
                 self.selected = self
                     .filtered

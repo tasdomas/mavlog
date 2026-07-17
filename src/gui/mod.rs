@@ -3,6 +3,7 @@
 
 mod columns;
 mod filters;
+mod plots;
 mod widgets;
 
 use anyhow::{anyhow, Result};
@@ -68,6 +69,7 @@ struct GuiApp {
     /// Whether the Columns window is open.
     columns_open: bool,
     columns_state: columns::ColumnsState,
+    plots_state: plots::PlotsState,
 }
 
 impl GuiApp {
@@ -88,6 +90,7 @@ impl GuiApp {
             filters_state: filters::FiltersState::default(),
             columns_open: false,
             columns_state: columns::ColumnsState::default(),
+            plots_state: plots::PlotsState::default(),
         }
     }
 
@@ -308,6 +311,9 @@ impl GuiApp {
                 }
                 if ui.button("Columns").clicked() {
                     self.columns_open = true;
+                }
+                if ui.button("Plots").clicked() {
+                    self.plots_state.open_manager();
                 }
                 if ui.button("Save setup").clicked() {
                     self.save_setup();
@@ -587,6 +593,10 @@ impl eframe::App for GuiApp {
             } else {
                 self.columns_open = false;
             }
+        }
+        if let Some(session) = &mut self.session {
+            plots::show_manager(&ctx, session, &mut self.plots_state);
+            plots::show_open_plots(&ctx, session, &mut self.plots_state);
         }
 
         if let Some(message) = self.error.clone() {

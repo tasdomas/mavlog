@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 
+use crate::core::plot::PlotDef;
 use crate::core::time::TimeFormat;
 
 /// Persisted per-file state, stored as JSON next to the tlog.
@@ -16,6 +17,10 @@ pub struct Setup {
     /// Custom column definitions in `parse_columns` text form.
     #[serde(default)]
     pub columns: String,
+    /// Saved plot definitions. Defaulted so sidecars from before plots
+    /// existed still load.
+    #[serde(default)]
+    pub plots: Vec<PlotDef>,
 }
 
 /// Path of the setup sidecar for a given log file.
