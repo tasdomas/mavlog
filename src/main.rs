@@ -25,7 +25,9 @@ fn main() -> Result<()> {
 
     let mut terminal = ratatui::init();
     let _ = crossterm::execute!(std::io::stdout(), event::EnableMouseCapture);
-    let result = App::new(path, data, entries).run(&mut terminal);
+    let mut app = App::new(path, data, entries);
+    app.load_setup();
+    let result = app.run(&mut terminal);
     let _ = crossterm::execute!(std::io::stdout(), event::DisableMouseCapture);
     ratatui::restore();
     result
@@ -37,10 +39,25 @@ enum Focus {
     Detail,
 }
 
-#[derive(PartialEq, Clone, Copy)]
+#[derive(PartialEq, Clone, Copy, serde::Serialize, serde::Deserialize)]
 enum TimeFormat {
     DateTime,
     OffsetSecs,
+}
+
+/// Persisted per-file state, stored as JSON next to the tlog.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Setup {
+    time_format: TimeFormat,
+    filter: String,
+    /// Marked messages by entry index, with optional labels.
+    marks: std::collections::BTreeMap<usize, String>,
+    /// Entry index of the selected message.
+    selected: usize,
+}
+
+fn setup_path(log_path: &str) -> String {
+    format!("{log_path}.mavlog.json")
 }
 
 struct Settings {
@@ -96,6 +113,8 @@ struct App {
     type_options: Vec<String>,
     /// Marked messages by entry index; the value is an optional label.
     marks: HashMap<usize, String>,
+    /// Transient footer notice (e.g. save confirmation), cleared on keypress.
+    status: Option<String>,
 }
 
 #[derive(PartialEq, Clone, Copy)]
@@ -206,6 +225,7 @@ impl App {
             id_options,
             type_options,
             marks: HashMap::new(),
+            status: None,
             selected: 0,
             offset: 0,
             view_height: 1,
@@ -252,6 +272,7 @@ impl App {
 
     /// Returns false when the app should quit.
     fn handle_key(&mut self, code: KeyCode) -> bool {
+        self.status = None;
         if self.settings_open {
             self.handle_settings_key(code);
             return true;
@@ -288,6 +309,7 @@ impl App {
                 })
             }
             KeyCode::Char(' ') => self.toggle_mark(),
+            KeyCode::Char('w') => self.save_setup(),
             KeyCode::Esc => {
                 if self.focus == Focus::Detail {
                     self.focus = Focus::List;
@@ -360,6 +382,50 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    /// Restore a previously saved setup for this file, if present.
+    fn load_setup(&mut self) {
+        let path = setup_path(&self.path);
+        let Ok(json) = fs::read_to_string(&path) else {
+            return;
+        };
+        match serde_json::from_str::<Setup>(&json) {
+            Ok(setup) => {
+                self.settings.time_format = setup.time_format;
+                if let Ok(filters) = parse_filters(&setup.filter) {
+                    self.filters = filters;
+                    self.filter_text = setup.filter.trim().to_string();
+                }
+                self.marks = setup
+                    .marks
+                    .into_iter()
+                    .filter(|&(i, _)| i < self.entries.len())
+                    .collect();
+                self.apply_filter();
+                self.selected = self
+                    .filtered
+                    .partition_point(|&i| i < setup.selected)
+                    .min(self.filtered.len().saturating_sub(1));
+                self.status = Some(format!("Loaded setup from {path}"));
+            }
+            Err(err) => self.status = Some(format!("Failed to load {path}: {err}")),
+        }
+    }
+
+    fn save_setup(&mut self) {
+        let setup = Setup {
+            time_format: self.settings.time_format,
+            filter: self.filter_text.clone(),
+            marks: self.marks.iter().map(|(&i, l)| (i, l.clone())).collect(),
+            selected: self.filtered.get(self.selected).copied().unwrap_or(0),
+        };
+        let path = setup_path(&self.path);
+        let json = serde_json::to_string_pretty(&setup).expect("setup serializes");
+        self.status = Some(match fs::write(&path, json) {
+            Ok(()) => format!("Setup saved to {path}"),
+            Err(err) => format!("Failed to save {path}: {err}"),
+        });
     }
 
     /// Toggle the mark on the selected message. Marking also opens the
@@ -692,7 +758,11 @@ impl App {
             } else {
                 format!("{}/{} ", self.selected + 1, self.filtered.len())
             };
-            let hints = if self.settings_open {
+            let status_text;
+            let hints = if let Some(status) = &self.status {
+                status_text = format!(" {status}");
+                status_text.as_str()
+            } else if self.settings_open {
                 " ↑/↓ select  Enter/Space toggle  Esc close"
             } else if let Some(popup) = &self.filter_popup {
                 match &popup.editor {
@@ -704,8 +774,8 @@ impl App {
                 }
             } else {
                 match self.focus {
-                    Focus::List => " ↑/↓ select  →/Tab details  Space mark  t jump  f filter  s settings  q quit",
-                    Focus::Detail => " ↑/↓ scroll  ←/Esc list  Space mark  t jump  f filter  s settings  q quit",
+                    Focus::List => " ↑/↓ select  →/Tab details  Space mark  t jump  f filter  s settings  w save  q quit",
+                    Focus::Detail => " ↑/↓ scroll  ←/Esc list  Space mark  t jump  f filter  s settings  w save  q quit",
                 }
             };
             frame.render_widget(
