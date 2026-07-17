@@ -52,6 +52,15 @@ impl PlotsState {
         self.manager_open = true;
     }
 
+    /// Whether the manager window is open (used by the Esc-to-close audit).
+    pub fn is_manager_open(&self) -> bool {
+        self.manager_open
+    }
+
+    pub fn close_manager(&mut self) {
+        self.manager_open = false;
+    }
+
     fn extract(session: &Session, plot_def: &PlotDef) -> Vec<Vec<[f64; 2]>> {
         plot_def.series.iter().map(|s| plot::extract(session, s)).collect()
     }

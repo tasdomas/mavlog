@@ -70,6 +70,8 @@ struct GuiApp {
     columns_open: bool,
     columns_state: columns::ColumnsState,
     plots_state: plots::PlotsState,
+    /// Whether the Help window is open.
+    help_open: bool,
 }
 
 impl GuiApp {
@@ -91,6 +93,7 @@ impl GuiApp {
             columns_open: false,
             columns_state: columns::ColumnsState::default(),
             plots_state: plots::PlotsState::default(),
+            help_open: false,
         }
     }
 
@@ -280,6 +283,30 @@ impl GuiApp {
         }
     }
 
+    /// Esc closes whichever window is open, in a fixed precedence (most
+    /// transient first) since egui doesn't track window stacking order for
+    /// us. One press closes at most one window.
+    fn handle_escape(&mut self, ctx: &egui::Context) {
+        if !ctx.input(|i| i.key_pressed(Key::Escape)) {
+            return;
+        }
+        if self.error.is_some() {
+            self.error = None;
+        } else if self.label_prompt.is_some() {
+            self.label_prompt = None;
+        } else if self.help_open {
+            self.help_open = false;
+        } else if self.settings_open {
+            self.settings_open = false;
+        } else if self.filters_open {
+            self.filters_open = false;
+        } else if self.columns_open {
+            self.columns_open = false;
+        } else if self.plots_state.is_manager_open() {
+            self.plots_state.close_manager();
+        }
+    }
+
     fn toolbar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             if ui.button("Open…").clicked() {
@@ -322,7 +349,55 @@ impl GuiApp {
                     self.settings_open = true;
                 }
             }
+            ui.separator();
+            if ui.button("Help").clicked() {
+                self.help_open = true;
+            }
         });
+    }
+
+    fn help_window(&mut self, ctx: &egui::Context) {
+        if !self.help_open {
+            return;
+        }
+        let mut open = true;
+        egui::Window::new("Help")
+            .open(&mut open)
+            .collapsible(false)
+            .default_width(360.0)
+            .show(ctx, |ui| {
+                ui.label(egui::RichText::new("Keyboard shortcuts").strong());
+                ui.add_space(4.0);
+                for (keys, action) in [
+                    ("Ctrl/Cmd+O", "Open a tlog file"),
+                    ("Ctrl/Cmd+S", "Save the setup sidecar"),
+                    ("Up / Down", "Move the selection"),
+                    ("Page Up / Page Down", "Move the selection by a page"),
+                    ("Home / End", "Jump to the first / last message"),
+                    ("Space", "Toggle a mark on the selected message"),
+                    ("Enter", "Submit the jump-to-time or label box"),
+                    ("Esc", "Close the frontmost window"),
+                ] {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(keys).monospace().strong());
+                        ui.label(action);
+                    });
+                }
+                ui.add_space(8.0);
+                ui.label(egui::RichText::new("Mouse").strong());
+                ui.add_space(4.0);
+                for (action, desc) in [
+                    ("Click a row", "Select that message"),
+                    ("Right-click a row", "Add/edit/remove its mark"),
+                    ("Drag a file onto the window", "Open it"),
+                ] {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(action).strong());
+                        ui.label(desc);
+                    });
+                }
+            });
+        self.help_open = open;
     }
 
     fn settings_window(&mut self, ctx: &egui::Context) {
@@ -563,6 +638,7 @@ impl eframe::App for GuiApp {
         }
 
         self.handle_nav_keys(&ctx);
+        self.handle_escape(&ctx);
 
         egui::Panel::top("toolbar").show(ui, |ui| self.toolbar(ui));
 
@@ -580,6 +656,7 @@ impl eframe::App for GuiApp {
 
         self.settings_window(&ctx);
         self.label_window(&ctx);
+        self.help_window(&ctx);
         if self.filters_open {
             if let Some(session) = &mut self.session {
                 filters::show(&ctx, &mut self.filters_open, session, &mut self.filters_state);
