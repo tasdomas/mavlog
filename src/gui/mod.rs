@@ -1,6 +1,7 @@
 //! The graphical (egui/eframe) frontend. Owns an optional `Session` (none
 //! until a file is opened) plus GUI-only view state.
 
+mod columns;
 mod filters;
 mod widgets;
 
@@ -64,6 +65,9 @@ struct GuiApp {
     /// Whether the Filters window is open.
     filters_open: bool,
     filters_state: filters::FiltersState,
+    /// Whether the Columns window is open.
+    columns_open: bool,
+    columns_state: columns::ColumnsState,
 }
 
 impl GuiApp {
@@ -82,6 +86,8 @@ impl GuiApp {
             label_input: String::new(),
             filters_open: false,
             filters_state: filters::FiltersState::default(),
+            columns_open: false,
+            columns_state: columns::ColumnsState::default(),
         }
     }
 
@@ -299,6 +305,9 @@ impl GuiApp {
                 ui.separator();
                 if ui.button("Filters").clicked() {
                     self.filters_open = true;
+                }
+                if ui.button("Columns").clicked() {
+                    self.columns_open = true;
                 }
                 if ui.button("Save setup").clicked() {
                     self.save_setup();
@@ -570,6 +579,13 @@ impl eframe::App for GuiApp {
                 filters::show(&ctx, &mut self.filters_open, session, &mut self.filters_state);
             } else {
                 self.filters_open = false;
+            }
+        }
+        if self.columns_open {
+            if let Some(session) = &mut self.session {
+                columns::show(&ctx, &mut self.columns_open, session, &mut self.columns_state);
+            } else {
+                self.columns_open = false;
             }
         }
 

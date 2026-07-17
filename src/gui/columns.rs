@@ -1,0 +1,207 @@
+//! The Columns window: view, add, edit and remove `Session::columns`.
+
+use eframe::egui;
+
+use crate::core::column::CustomColumn;
+use crate::core::session::Session;
+use crate::gui::widgets::searchable_combo;
+
+/// Open editor for a single custom column (name/id/type/field), like the
+/// TUI's ColumnEditor.
+pub struct ColumnEditor {
+    /// Index of the column being edited, or None when adding a new one.
+    index: Option<usize>,
+    name: String,
+    /// 0 = any, otherwise 1 + index into `Session::id_options`.
+    id_choice: usize,
+    /// Index into `Session::type_options` (a type is required).
+    type_choice: usize,
+    field: String,
+    id_query: String,
+    type_query: String,
+    field_query: String,
+}
+
+/// State for the Columns window; `None` on `GuiApp` means it's closed.
+#[derive(Default)]
+pub struct ColumnsState {
+    editor: Option<ColumnEditor>,
+    /// Set when Save is pressed without a field chosen.
+    error: Option<String>,
+}
+
+/// Show the Columns window. `open` is cleared when the user clicks Close.
+pub fn show(ctx: &egui::Context, open: &mut bool, session: &mut Session, state: &mut ColumnsState) {
+    egui::Window::new("Columns")
+        .collapsible(false)
+        .default_width(360.0)
+        .show(ctx, |ui| {
+            let mut remove = None;
+            let mut edit = None;
+            for (i, col) in session.columns.iter().enumerate() {
+                ui.horizontal(|ui| {
+                    ui.label(col.to_text());
+                    if ui.small_button("Edit").clicked() {
+                        edit = Some(i);
+                    }
+                    if ui.small_button("Remove").clicked() {
+                        remove = Some(i);
+                    }
+                });
+            }
+
+            if let Some(i) = remove {
+                let mut columns = std::mem::take(&mut session.columns);
+                columns.remove(i);
+                session.set_columns(columns);
+                if state.editor.as_ref().is_some_and(|e| e.index == Some(i)) {
+                    state.editor = None;
+                }
+            }
+            if let Some(i) = edit {
+                state.editor = Some(editor_for(session, Some(i)));
+                state.error = None;
+            }
+
+            ui.separator();
+            ui.horizontal(|ui| {
+                if state.editor.is_none() && ui.button("Add column").clicked() {
+                    state.editor = Some(editor_for(session, None));
+                    state.error = None;
+                }
+                if ui.button("Close").clicked() {
+                    *open = false;
+                }
+            });
+
+            let mut save = false;
+            let mut cancel = false;
+            if let Some(editor) = &mut state.editor {
+                ui.separator();
+                ui.horizontal(|ui| {
+                    ui.label("Name:");
+                    ui.text_edit_singleline(&mut editor.name);
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Id:");
+                    let label = session.id_option_text(editor.id_choice);
+                    if let Some(choice) = searchable_combo(
+                        ui,
+                        "column_id",
+                        &label,
+                        &id_labels(session),
+                        &mut editor.id_query,
+                    ) {
+                        editor.id_choice = choice;
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Type:");
+                    let label = session
+                        .type_options
+                        .get(editor.type_choice)
+                        .cloned()
+                        .unwrap_or_default();
+                    if let Some(choice) = searchable_combo(
+                        ui,
+                        "column_type",
+                        &label,
+                        &session.type_options,
+                        &mut editor.type_query,
+                    ) && choice != editor.type_choice
+                    {
+                        editor.type_choice = choice;
+                        editor.field.clear(); // fields belong to a type; reset on change
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Field:");
+                    let field_options = session.field_options(
+                        session.type_options.get(editor.type_choice).map_or("", String::as_str),
+                    );
+                    let label = if editor.field.is_empty() { "(pick a field)" } else { &editor.field };
+                    if let Some(choice) = searchable_combo(
+                        ui,
+                        "column_field",
+                        label,
+                        &field_options,
+                        &mut editor.field_query,
+                    ) {
+                        editor.field = field_options[choice].clone();
+                    }
+                });
+                if let Some(err) = &state.error {
+                    ui.colored_label(egui::Color32::LIGHT_RED, err);
+                }
+                ui.horizontal(|ui| {
+                    if ui.button("Save").clicked() {
+                        save = true;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        cancel = true;
+                    }
+                });
+            }
+            if save {
+                let editor = state.editor.as_ref().unwrap();
+                if editor.field.is_empty() {
+                    state.error = Some("Pick a message field before saving".to_string());
+                } else {
+                    let editor = state.editor.take().unwrap();
+                    let name = if editor.name.trim().is_empty() {
+                        editor.field.clone()
+                    } else {
+                        editor.name.trim().to_string()
+                    };
+                    let (sysid, compid) = match editor.id_choice.checked_sub(1) {
+                        Some(i) => {
+                            let (s, c) = session.id_options[i];
+                            (Some(s), Some(c))
+                        }
+                        None => (None, None),
+                    };
+                    let column = CustomColumn {
+                        name,
+                        sysid,
+                        compid,
+                        msg_type: session.type_options[editor.type_choice].clone(),
+                        field: editor.field,
+                        matches: Vec::new(),
+                    };
+                    let mut columns = std::mem::take(&mut session.columns);
+                    match editor.index {
+                        Some(i) => columns[i] = column,
+                        None => columns.push(column),
+                    }
+                    session.set_columns(columns);
+                    state.error = None;
+                }
+            } else if cancel {
+                state.editor = None;
+                state.error = None;
+            }
+        });
+}
+
+fn editor_for(session: &Session, index: Option<usize>) -> ColumnEditor {
+    let col = index.map(|i| &session.columns[i]);
+    ColumnEditor {
+        index,
+        name: col.map(|c| c.name.clone()).unwrap_or_default(),
+        id_choice: col
+            .and_then(|c| c.sysid.zip(c.compid))
+            .and_then(|pair| session.id_options.iter().position(|&p| p == pair))
+            .map_or(0, |i| i + 1),
+        type_choice: col
+            .and_then(|c| session.type_options.iter().position(|t| t.eq_ignore_ascii_case(&c.msg_type)))
+            .unwrap_or(0),
+        field: col.map(|c| c.field.clone()).unwrap_or_default(),
+        id_query: String::new(),
+        type_query: String::new(),
+        field_query: String::new(),
+    }
+}
+
+fn id_labels(session: &Session) -> Vec<String> {
+    (0..=session.id_options.len()).map(|i| session.id_option_text(i)).collect()
+}
