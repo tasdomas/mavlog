@@ -54,6 +54,33 @@ struct Setup {
     marks: std::collections::BTreeMap<usize, String>,
     /// Entry index of the selected message.
     selected: usize,
+    /// Custom column definitions in `parse_columns` text form.
+    #[serde(default)]
+    columns: String,
+}
+
+/// A user-defined list column showing the last-seen value of one field of
+/// one message type.
+struct CustomColumn {
+    name: String,
+    sysid: Option<u8>,
+    compid: Option<u8>,
+    /// Exact message-type name, uppercase.
+    msg_type: String,
+    field: String,
+    /// Entry indices of messages this column reads from, ascending.
+    matches: Vec<usize>,
+}
+
+impl CustomColumn {
+    fn to_text(&self) -> String {
+        let mut expr = String::new();
+        if self.sysid.is_some() || self.compid.is_some() {
+            let part = |v: Option<u8>| v.map_or("*".to_string(), |v| v.to_string());
+            expr = format!("{}:{} ", part(self.sysid), part(self.compid));
+        }
+        format!("{} = {expr}{}.{}", self.name, self.msg_type, self.field)
+    }
 }
 
 fn setup_path(log_path: &str) -> String {
@@ -115,6 +142,10 @@ struct App {
     marks: HashMap<usize, String>,
     /// Transient footer notice (e.g. save confirmation), cleared on keypress.
     status: Option<String>,
+    columns: Vec<CustomColumn>,
+    /// Raw column definitions, kept for re-editing.
+    columns_text: String,
+    columns_popup: Option<ColumnsPopup>,
 }
 
 #[derive(PartialEq, Clone, Copy)]
@@ -123,6 +154,7 @@ enum PromptKind {
     Filter,
     /// Label the marked message at this entry index.
     Label(usize),
+    Columns,
 }
 
 /// Footer input line (jump-to-time or filter).
@@ -204,6 +236,29 @@ struct Dropdown {
     highlight: usize,
 }
 
+/// Popup for viewing, creating, editing and deleting custom columns.
+struct ColumnsPopup {
+    /// Selected row: an index into the column list, or one past the end for
+    /// the "add column" row.
+    row: usize,
+    editor: Option<ColumnEditor>,
+}
+
+/// Editor for a single custom column.
+struct ColumnEditor {
+    /// Index of the column being edited, or None when creating a new one.
+    index: Option<usize>,
+    name: String,
+    /// 0 = any, otherwise 1 + index into App::id_options.
+    id_choice: usize,
+    /// Index into App::type_options (a type is required).
+    type_choice: usize,
+    field: String,
+    /// 0 = name, 1 = id, 2 = type, 3 = field, 4 = save, 5 = cancel.
+    row: usize,
+    dropdown: Option<Dropdown>,
+}
+
 impl App {
     fn new(path: String, data: Vec<u8>, entries: Vec<tlog::LogEntry>) -> Self {
         let mut id_options: Vec<(u8, u8)> =
@@ -226,6 +281,9 @@ impl App {
             type_options,
             marks: HashMap::new(),
             status: None,
+            columns: Vec::new(),
+            columns_text: String::new(),
+            columns_popup: None,
             selected: 0,
             offset: 0,
             view_height: 1,
@@ -255,6 +313,7 @@ impl App {
                     if self.settings_open
                         || self.prompt.is_some()
                         || self.filter_popup.is_some()
+                        || self.columns_popup.is_some()
                     {
                         continue;
                     }
@@ -279,6 +338,10 @@ impl App {
         }
         if self.filter_popup.is_some() {
             self.handle_filter_popup_key(code);
+            return true;
+        }
+        if self.columns_popup.is_some() {
+            self.handle_columns_popup_key(code);
             return true;
         }
         if self.prompt.is_some() {
@@ -310,6 +373,19 @@ impl App {
             }
             KeyCode::Char(' ') => self.toggle_mark(),
             KeyCode::Char('w') => self.save_setup(),
+            KeyCode::Char('c') => {
+                self.columns_popup = Some(ColumnsPopup {
+                    row: 0,
+                    editor: None,
+                })
+            }
+            KeyCode::Char('C') => {
+                self.prompt = Some(Prompt {
+                    kind: PromptKind::Columns,
+                    input: self.columns_text.clone(),
+                    error: None,
+                })
+            }
             KeyCode::Esc => {
                 if self.focus == Focus::Detail {
                     self.focus = Focus::List;
@@ -362,6 +438,9 @@ impl App {
                         self.marks.insert(entry_index, input.trim().to_string());
                         Ok(())
                     }
+                    PromptKind::Columns => {
+                        parse_columns(&input).map(|columns| self.set_columns(columns))
+                    }
                 };
                 match result {
                     Ok(()) => self.prompt = None,
@@ -402,6 +481,9 @@ impl App {
                     .into_iter()
                     .filter(|&(i, _)| i < self.entries.len())
                     .collect();
+                if let Ok(columns) = parse_columns(&setup.columns) {
+                    self.set_columns(columns);
+                }
                 self.apply_filter();
                 self.selected = self
                     .filtered
@@ -419,6 +501,7 @@ impl App {
             filter: self.filter_text.clone(),
             marks: self.marks.iter().map(|(&i, l)| (i, l.clone())).collect(),
             selected: self.filtered.get(self.selected).copied().unwrap_or(0),
+            columns: self.columns_text.clone(),
         };
         let path = setup_path(&self.path);
         let json = serde_json::to_string_pretty(&setup).expect("setup serializes");
@@ -426,6 +509,57 @@ impl App {
             Ok(()) => format!("Setup saved to {path}"),
             Err(err) => format!("Failed to save {path}: {err}"),
         });
+    }
+
+    /// Install custom columns and index which entries each one reads from.
+    fn set_columns(&mut self, mut columns: Vec<CustomColumn>) {
+        for col in &mut columns {
+            col.matches = self
+                .entries
+                .iter()
+                .enumerate()
+                .filter(|(_, e)| {
+                    col.sysid.is_none_or(|s| s == e.sysid)
+                        && col.compid.is_none_or(|c| c == e.compid)
+                        && e.name.eq_ignore_ascii_case(&col.msg_type)
+                })
+                .map(|(i, _)| i)
+                .collect();
+        }
+        self.columns_text = columns
+            .iter()
+            .map(CustomColumn::to_text)
+            .collect::<Vec<_>>()
+            .join(", ");
+        self.columns = columns;
+    }
+
+    /// The column's field value from the last matching message at or before
+    /// the given entry.
+    fn column_value(&self, col: &CustomColumn, entry_index: usize) -> String {
+        let pos = col.matches.partition_point(|&i| i <= entry_index);
+        let Some(&source) = pos.checked_sub(1).map(|p| &col.matches[p]) else {
+            return String::new(); // nothing seen yet
+        };
+        let Ok(msg) = tlog::decode(&self.data, &self.entries[source]) else {
+            return "?".to_string();
+        };
+        let Ok(value) = serde_json::to_value(&msg) else {
+            return "?".to_string();
+        };
+        let field = value
+            .as_object()
+            .and_then(|obj| obj.iter().find(|(k, _)| k.eq_ignore_ascii_case(&col.field)))
+            .map(|(_, v)| v);
+        match field {
+            None => "?".to_string(),
+            Some(serde_json::Value::String(s)) => s.clone(),
+            // Enum fields serialize as {"type": "MAV_..."}.
+            Some(v) => match v.get("type").and_then(|t| t.as_str()) {
+                Some(name) => name.to_string(),
+                None => v.to_string(),
+            },
+        }
     }
 
     /// Toggle the mark on the selected message. Marking also opens the
@@ -533,7 +667,8 @@ impl App {
         let editor_ref = self.filter_popup.as_ref().unwrap().editor.as_ref().unwrap();
         let field_row = editor_ref.row;
         if let Some(dropdown) = &editor_ref.dropdown {
-            let options = self.dropdown_options(field_row, &dropdown.query);
+            let labels = self.filter_dropdown_labels(field_row);
+            let options = match_labels(&labels, &dropdown.query);
             let editor = self.filter_popup.as_mut().unwrap().editor.as_mut().unwrap();
             let dropdown = editor.dropdown.as_mut().unwrap();
             match code {
@@ -638,6 +773,234 @@ impl App {
         self.apply_filter();
     }
 
+    fn handle_columns_popup_key(&mut self, code: KeyCode) {
+        let popup = self.columns_popup.as_mut().unwrap();
+        if popup.editor.is_some() {
+            self.handle_column_editor_key(code);
+            return;
+        }
+        match code {
+            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('c') => {
+                self.columns_popup = None
+            }
+            KeyCode::Up | KeyCode::Char('k') => popup.row = popup.row.saturating_sub(1),
+            KeyCode::Down | KeyCode::Char('j') => {
+                popup.row = (popup.row + 1).min(self.columns.len())
+            }
+            KeyCode::Char('d') | KeyCode::Delete | KeyCode::Backspace => {
+                if popup.row < self.columns.len() {
+                    let row = popup.row;
+                    let mut columns = std::mem::take(&mut self.columns);
+                    columns.remove(row);
+                    self.set_columns(columns);
+                    let popup = self.columns_popup.as_mut().unwrap();
+                    popup.row = popup.row.min(self.columns.len());
+                }
+            }
+            KeyCode::Enter | KeyCode::Char('n') | KeyCode::Char('a') => {
+                let editing = popup.row < self.columns.len() && code == KeyCode::Enter;
+                let editor = if editing {
+                    let col = &self.columns[popup.row];
+                    ColumnEditor {
+                        index: Some(popup.row),
+                        name: col.name.clone(),
+                        id_choice: col
+                            .sysid
+                            .zip(col.compid)
+                            .and_then(|pair| {
+                                self.id_options.iter().position(|&p| p == pair)
+                            })
+                            .map_or(0, |i| i + 1),
+                        type_choice: self
+                            .type_options
+                            .iter()
+                            .position(|t| t.eq_ignore_ascii_case(&col.msg_type))
+                            .unwrap_or(0),
+                        field: col.field.clone(),
+                        row: 0,
+                        dropdown: None,
+                    }
+                } else {
+                    ColumnEditor {
+                        index: None,
+                        name: String::new(),
+                        id_choice: 0,
+                        type_choice: 0,
+                        field: String::new(),
+                        row: 0,
+                        dropdown: None,
+                    }
+                };
+                self.columns_popup.as_mut().unwrap().editor = Some(editor);
+            }
+            _ => {}
+        }
+    }
+
+    /// Dropdown option labels for a column-editor field.
+    fn column_dropdown_labels(&self, field_row: usize, type_choice: usize) -> Vec<String> {
+        match field_row {
+            1 => (0..=self.id_options.len())
+                .map(|i| self.id_option_text(i))
+                .collect(),
+            2 => self.type_options.clone(),
+            _ => self
+                .type_options
+                .get(type_choice)
+                .map(|t| self.field_options(t))
+                .unwrap_or_default(),
+        }
+    }
+
+    /// Field names of a message type, from the first decodable sample in
+    /// the file.
+    fn field_options(&self, msg_type: &str) -> Vec<String> {
+        self.entries
+            .iter()
+            .filter(|e| e.name == msg_type)
+            .find_map(|e| tlog::decode(&self.data, e).ok())
+            .and_then(|msg| serde_json::to_value(&msg).ok())
+            .and_then(|value| {
+                value.as_object().map(|obj| {
+                    obj.keys().filter(|k| *k != "type").cloned().collect()
+                })
+            })
+            .unwrap_or_default()
+    }
+
+    fn handle_column_editor_key(&mut self, code: KeyCode) {
+        let editor_ref = self.columns_popup.as_ref().unwrap().editor.as_ref().unwrap();
+        let (field_row, type_choice) = (editor_ref.row, editor_ref.type_choice);
+
+        // A dropdown is open: characters filter the options, arrows navigate.
+        if let Some(dropdown) = &editor_ref.dropdown {
+            let labels = self.column_dropdown_labels(field_row, type_choice);
+            let options = match_labels(&labels, &dropdown.query);
+            let editor = self.columns_popup.as_mut().unwrap().editor.as_mut().unwrap();
+            let dropdown = editor.dropdown.as_mut().unwrap();
+            match code {
+                KeyCode::Esc => editor.dropdown = None,
+                KeyCode::Char(c) => {
+                    dropdown.query.push(c);
+                    dropdown.highlight = 0;
+                }
+                KeyCode::Backspace => {
+                    dropdown.query.pop();
+                    dropdown.highlight = 0;
+                }
+                KeyCode::Up => dropdown.highlight = dropdown.highlight.saturating_sub(1),
+                KeyCode::Down => {
+                    dropdown.highlight =
+                        (dropdown.highlight + 1).min(options.len().saturating_sub(1))
+                }
+                KeyCode::Home => dropdown.highlight = 0,
+                KeyCode::End => dropdown.highlight = options.len().saturating_sub(1),
+                KeyCode::Enter => {
+                    if let Some(&choice) = options.get(dropdown.highlight) {
+                        match field_row {
+                            1 => editor.id_choice = choice,
+                            2 => {
+                                if editor.type_choice != choice {
+                                    editor.type_choice = choice;
+                                    // Fields belong to a type; reset on change.
+                                    editor.field.clear();
+                                }
+                            }
+                            _ => editor.field = labels[choice].clone(),
+                        }
+                        editor.dropdown = None;
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
+
+        // Position of the current field within the field dropdown, computed
+        // up front to avoid borrowing tangles when opening that dropdown.
+        let field_highlight = {
+            let labels = self.column_dropdown_labels(3, type_choice);
+            labels
+                .iter()
+                .position(|l| l == &editor_ref.field)
+                .unwrap_or(0)
+        };
+
+        let editor = self.columns_popup.as_mut().unwrap().editor.as_mut().unwrap();
+        match code {
+            KeyCode::Esc => self.columns_popup.as_mut().unwrap().editor = None,
+            KeyCode::Up | KeyCode::BackTab => editor.row = editor.row.saturating_sub(1),
+            KeyCode::Down | KeyCode::Tab => editor.row = (editor.row + 1).min(5),
+            KeyCode::Left if editor.row == 5 => editor.row = 4,
+            KeyCode::Right if editor.row == 4 => editor.row = 5,
+            // The name row is a text input.
+            KeyCode::Char(c) if editor.row == 0 => editor.name.push(c),
+            KeyCode::Backspace if editor.row == 0 => {
+                editor.name.pop();
+            }
+            KeyCode::Char('k') if editor.row != 0 => {
+                editor.row = editor.row.saturating_sub(1)
+            }
+            KeyCode::Char('j') if editor.row != 0 => editor.row = (editor.row + 1).min(5),
+            KeyCode::Enter => match editor.row {
+                0 => editor.row = 1,
+                1 | 2 | 3 => {
+                    let highlight = match editor.row {
+                        1 => editor.id_choice,
+                        2 => editor.type_choice,
+                        _ => field_highlight,
+                    };
+                    editor.dropdown = Some(Dropdown {
+                        query: String::new(),
+                        highlight,
+                    });
+                }
+                4 => self.save_column_editor(),
+                _ => self.columns_popup.as_mut().unwrap().editor = None,
+            },
+            _ => {}
+        }
+    }
+
+    fn save_column_editor(&mut self) {
+        let editor = self.columns_popup.as_ref().unwrap().editor.as_ref().unwrap();
+        if editor.field.is_empty() {
+            // A field is required; a column can't be saved without one.
+            self.status = Some("Pick a message field before saving".to_string());
+            return;
+        }
+        let name = if editor.name.trim().is_empty() {
+            editor.field.clone()
+        } else {
+            editor.name.trim().to_string()
+        };
+        let (sysid, compid) = match editor.id_choice.checked_sub(1) {
+            Some(i) => {
+                let (s, c) = self.id_options[i];
+                (Some(s), Some(c))
+            }
+            None => (None, None),
+        };
+        let column = CustomColumn {
+            name,
+            sysid,
+            compid,
+            msg_type: self.type_options[editor.type_choice].clone(),
+            field: editor.field.clone(),
+            matches: Vec::new(),
+        };
+        let index = editor.index;
+        let mut columns = std::mem::take(&mut self.columns);
+        match index {
+            Some(i) => columns[i] = column,
+            None => columns.push(column),
+        }
+        self.set_columns(columns);
+        let popup = self.columns_popup.as_mut().unwrap();
+        popup.editor = None;
+        popup.row = index.unwrap_or(self.columns.len() - 1);
+    }
+
     fn handle_settings_key(&mut self, code: KeyCode) {
         match code {
             KeyCode::Char('q') | KeyCode::Char('s') | KeyCode::Esc => {
@@ -734,6 +1097,9 @@ impl App {
                 },
                 PromptKind::Filter => " Filter (e.g. 1:1 HEARTBEAT, GPS*, 255 — empty clears): ",
                 PromptKind::Label(_) => " Label for marked message (Enter to save, Esc to skip): ",
+                PromptKind::Columns => {
+                    " Columns (NAME = [sys[:comp]] TYPE.FIELD, comma-separated — empty clears): "
+                }
             };
             let mut spans = vec![
                 Span::styled(label, bar_style.add_modifier(Modifier::BOLD)),
@@ -772,10 +1138,18 @@ impl App {
                     Some(_) => " ↑/↓ fields  Enter open/confirm  Esc back",
                     None => " ↑/↓ select  Enter edit  n new  d delete  Esc close",
                 }
+            } else if let Some(popup) = &self.columns_popup {
+                match &popup.editor {
+                    Some(editor) if editor.dropdown.is_some() => {
+                        " type to filter  ↑/↓ choose  Enter select  Esc cancel"
+                    }
+                    Some(_) => " ↑/↓ fields  type in Name  Enter open/confirm  Esc back",
+                    None => " ↑/↓ select  Enter edit  n new  d delete  Esc close",
+                }
             } else {
                 match self.focus {
-                    Focus::List => " ↑/↓ select  →/Tab details  Space mark  t jump  f filter  s settings  w save  q quit",
-                    Focus::Detail => " ↑/↓ scroll  ←/Esc list  Space mark  t jump  f filter  s settings  w save  q quit",
+                    Focus::List => " ↑/↓ select  →/Tab details  Space mark  t jump  f filter  c columns  s settings  w save  q quit",
+                    Focus::Detail => " ↑/↓ scroll  ←/Esc list  Space mark  t jump  f filter  c columns  s settings  w save  q quit",
                 }
             };
             frame.render_widget(
@@ -795,6 +1169,116 @@ impl App {
             self.draw_settings(frame);
         }
         self.draw_filter_popup(frame);
+        self.draw_columns_popup(frame);
+    }
+
+    fn draw_columns_popup(&self, frame: &mut Frame) {
+        let Some(popup) = &self.columns_popup else {
+            return;
+        };
+        if let Some(editor) = &popup.editor {
+            self.draw_column_editor(frame, editor);
+            return;
+        }
+
+        let height = self.columns.len() as u16 + 3;
+        let area = centered_fixed(frame.area(), 56, height);
+        let lines: Vec<Line> = (0..=self.columns.len())
+            .map(|i| {
+                let text = if i < self.columns.len() {
+                    format!(" {} ", self.columns[i].to_text())
+                } else {
+                    " + Add column ".to_string()
+                };
+                if i == popup.row {
+                    Line::styled(text, Style::new().add_modifier(Modifier::REVERSED))
+                } else {
+                    Line::raw(text)
+                }
+            })
+            .collect();
+
+        let block = Block::bordered()
+            .title(Line::styled(
+                " Columns ",
+                Style::new().add_modifier(Modifier::BOLD),
+            ))
+            .title_bottom(Line::raw(" Enter edit  n new  d delete  Esc ").right_aligned())
+            .border_style(Style::new().fg(Color::Cyan));
+        frame.render_widget(Clear, area);
+        frame.render_widget(Paragraph::new(lines).block(block), area);
+    }
+
+    fn draw_column_editor(&self, frame: &mut Frame, editor: &ColumnEditor) {
+        let area = centered_fixed(frame.area(), 52, 8);
+        let focused = |row: usize| editor.row == row && editor.dropdown.is_none();
+        let field_style = |row: usize| {
+            if focused(row) {
+                Style::new().add_modifier(Modifier::REVERSED)
+            } else {
+                Style::new()
+            }
+        };
+        let dropdown_field = |label: &str, value: String, row: usize| {
+            Line::from(vec![
+                Span::raw(format!(" {label:<18}")),
+                Span::styled(format!("[ {value:<22} ▾ ]"), field_style(row)),
+            ])
+        };
+        let name_value = if focused(0) {
+            format!("{}█", editor.name)
+        } else {
+            editor.name.clone()
+        };
+        let field_value = if editor.field.is_empty() {
+            "(pick a field)".to_string()
+        } else {
+            editor.field.clone()
+        };
+        let lines = vec![
+            Line::from(vec![
+                Span::raw(format!(" {:<18}", "Name")),
+                Span::styled(format!("[ {name_value:<24} ]"), field_style(0)),
+            ]),
+            dropdown_field("System:Component", self.id_option_text(editor.id_choice), 1),
+            dropdown_field(
+                "Message type",
+                self.type_options
+                    .get(editor.type_choice)
+                    .cloned()
+                    .unwrap_or_default(),
+                2,
+            ),
+            dropdown_field("Field", field_value, 3),
+            Line::raw(""),
+            Line::from(vec![
+                Span::raw(" ".repeat(14)),
+                Span::styled("[ Save ]", field_style(4)),
+                Span::raw("    "),
+                Span::styled("[ Cancel ]", field_style(5)),
+            ]),
+        ];
+
+        let title = if editor.index.is_some() {
+            " Edit column "
+        } else {
+            " New column "
+        };
+        let block = Block::bordered()
+            .title(Line::styled(title, Style::new().add_modifier(Modifier::BOLD)))
+            .border_style(Style::new().fg(Color::Cyan));
+        frame.render_widget(Clear, area);
+        frame.render_widget(Paragraph::new(lines).block(block), area);
+
+        if let Some(dropdown) = &editor.dropdown {
+            let title = match editor.row {
+                1 => " System:Component ",
+                2 => " Message type ",
+                _ => " Field ",
+            };
+            let labels = self.column_dropdown_labels(editor.row, editor.type_choice);
+            self.draw_dropdown(frame, title, &labels, dropdown);
+        }
     }
 
     fn draw_filter_pane(&self, frame: &mut Frame, area: ratatui::layout::Rect) {
@@ -889,35 +1373,35 @@ impl App {
         frame.render_widget(Paragraph::new(lines).block(block), area);
 
         if let Some(dropdown) = &editor.dropdown {
-            self.draw_dropdown(frame, editor, dropdown);
+            let title = match editor.row {
+                0 => " System:Component ",
+                _ => " Message type ",
+            };
+            let labels = self.filter_dropdown_labels(editor.row);
+            self.draw_dropdown(frame, title, &labels, dropdown);
         }
     }
 
-    /// Option indices (0 = "any") whose label contains the query,
-    /// case-insensitive.
-    fn dropdown_options(&self, field_row: usize, query: &str) -> Vec<usize> {
-        let query = query.to_ascii_lowercase();
-        let count = 1 + match field_row {
-            0 => self.id_options.len(),
-            _ => self.type_options.len(),
-        };
-        (0..count)
-            .filter(|&i| {
-                let label = match field_row {
-                    0 => self.id_option_text(i),
-                    _ => self.type_option_text(i),
-                };
-                label.to_ascii_lowercase().contains(&query)
-            })
-            .collect()
+    /// Dropdown option labels for a filter-editor field.
+    fn filter_dropdown_labels(&self, field_row: usize) -> Vec<String> {
+        match field_row {
+            0 => (0..=self.id_options.len())
+                .map(|i| self.id_option_text(i))
+                .collect(),
+            _ => (0..=self.type_options.len())
+                .map(|i| self.type_option_text(i))
+                .collect(),
+        }
     }
 
-    fn draw_dropdown(&self, frame: &mut Frame, editor: &FilterEditor, dropdown: &Dropdown) {
-        let title = match editor.row {
-            0 => " System:Component ",
-            _ => " Message type ",
-        };
-        let options = self.dropdown_options(editor.row, &dropdown.query);
+    fn draw_dropdown(
+        &self,
+        frame: &mut Frame,
+        title: &str,
+        labels: &[String],
+        dropdown: &Dropdown,
+    ) {
+        let options = match_labels(labels, &dropdown.query);
         let list_len = options.len().max(1); // keep room for "(no matches)"
         let view_height = list_len.min(12);
         let area = centered_fixed(frame.area(), 36, view_height as u16 + 3);
@@ -939,11 +1423,7 @@ impl App {
                 .saturating_sub(view_height / 2)
                 .min(options.len().saturating_sub(view_height));
             lines.extend((offset..options.len().min(offset + view_height)).map(|i| {
-                let value = match editor.row {
-                    0 => self.id_option_text(options[i]),
-                    _ => self.type_option_text(options[i]),
-                };
-                let text = format!(" {value} ");
+                let text = format!(" {} ", labels[options[i]]);
                 if i == dropdown.highlight {
                     Line::styled(text, Style::new().add_modifier(Modifier::REVERSED))
                 } else {
@@ -953,7 +1433,10 @@ impl App {
         }
 
         let mut block = Block::bordered()
-            .title(Line::styled(title, Style::new().add_modifier(Modifier::BOLD)))
+            .title(Line::styled(
+                title.to_string(),
+                Style::new().add_modifier(Modifier::BOLD),
+            ))
             .border_style(Style::new().fg(Color::Yellow));
         if options.len() > view_height {
             block = block.title_bottom(
@@ -1053,13 +1536,19 @@ impl App {
                     Some(label) => format!("● {label}"),
                     None => String::new(),
                 };
-                let row = Row::new(vec![
+                let mut cells = vec![
                     format!("{entry_index:>7}"),
                     self.format_list_time(entry.timestamp_us),
                     format!("{:>3}:{:<3}", entry.sysid, entry.compid),
                     entry.name.clone(),
-                    label,
-                ]);
+                ];
+                cells.extend(
+                    self.columns
+                        .iter()
+                        .map(|col| self.column_value(col, entry_index)),
+                );
+                cells.push(label);
+                let row = Row::new(cells);
                 if position == self.selected {
                     row.style(selection_style)
                 } else if mark.is_some() {
@@ -1069,18 +1558,28 @@ impl App {
                 }
             });
 
-        let table = Table::new(
-            rows,
-            [
-                Constraint::Length(7),
-                Constraint::Length(time_width),
-                Constraint::Length(7),
-                Constraint::Fill(1),
-                Constraint::Length(14),
-            ],
-        )
+        let mut constraints = vec![
+            Constraint::Length(7),
+            Constraint::Length(time_width),
+            Constraint::Length(7),
+            Constraint::Min(12),
+        ];
+        let mut header = vec![
+            "#".to_string(),
+            "TIME".to_string(),
+            "SYS:CMP".to_string(),
+            "MESSAGE".to_string(),
+        ];
+        for col in &self.columns {
+            constraints.push(Constraint::Length(col.name.len().max(8) as u16));
+            header.push(col.name.clone());
+        }
+        constraints.push(Constraint::Length(if self.columns.is_empty() { 14 } else { 10 }));
+        header.push("LABEL".to_string());
+
+        let table = Table::new(rows, constraints)
         .header(
-            Row::new(vec!["#", "TIME", "SYS:CMP", "MESSAGE", "LABEL"])
+            Row::new(header)
                 .style(Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
         )
         .block(self.pane_block(Focus::List).title(" Messages "));
@@ -1266,6 +1765,71 @@ fn parse_filters(input: &str) -> Result<Vec<FilterExpr>, String> {
     Ok(exprs)
 }
 
+/// Parse comma-separated column definitions: `NAME = [sys[:comp]] TYPE.FIELD`,
+/// e.g. "alt = 1:1 GLOBAL_POSITION_INT.relative_alt". Empty input clears.
+fn parse_columns(input: &str) -> Result<Vec<CustomColumn>, String> {
+    let mut columns = Vec::new();
+    for part in input.split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        let usage = || format!("expected NAME = [sys[:comp]] TYPE.FIELD in '{part}'");
+        let (name, expr) = part.split_once('=').ok_or_else(usage)?;
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(usage());
+        }
+        let (mut sysid, mut compid, mut type_field) = (None, None, None);
+        for token in expr.split_whitespace() {
+            let is_id_spec = token
+                .chars()
+                .all(|c| c.is_ascii_digit() || c == ':' || c == '*');
+            if is_id_spec {
+                if sysid.is_some() || compid.is_some() {
+                    return Err(format!("more than one id spec in '{part}'"));
+                }
+                let (sys, comp) = token.split_once(':').unwrap_or((token, ""));
+                let parse_id = |s: &str| -> Result<Option<u8>, String> {
+                    if s.is_empty() || s == "*" {
+                        return Ok(None);
+                    }
+                    s.parse()
+                        .map(Some)
+                        .map_err(|_| format!("bad id '{s}' in '{part}'"))
+                };
+                sysid = parse_id(sys)?;
+                compid = parse_id(comp)?;
+            } else if let Some((msg_type, field)) = token.split_once('.') {
+                if type_field.is_some() || msg_type.is_empty() || field.is_empty() {
+                    return Err(usage());
+                }
+                type_field = Some((msg_type.to_ascii_uppercase(), field.to_string()));
+            } else {
+                return Err(usage());
+            }
+        }
+        let (msg_type, field) = type_field.ok_or_else(usage)?;
+        columns.push(CustomColumn {
+            name: name.to_string(),
+            sysid,
+            compid,
+            msg_type,
+            field,
+            matches: Vec::new(),
+        });
+    }
+    Ok(columns)
+}
+
+/// Indices of labels containing the query, case-insensitive.
+fn match_labels(labels: &[String], query: &str) -> Vec<usize> {
+    let query = query.to_ascii_lowercase();
+    (0..labels.len())
+        .filter(|&i| labels[i].to_ascii_lowercase().contains(&query))
+        .collect()
+}
+
 /// Case-insensitive message-type match: substring by default, glob when the
 /// pattern contains '*'.
 fn name_matches(pattern: &str, name: &str) -> bool {
@@ -1406,6 +1970,25 @@ mod tests {
         // Substring filters (no '=') do match extensions of the name.
         let loose = parse_filters("ATTITUDE").unwrap();
         assert!(loose[0].matches(&entry(1, 1, "ATTITUDE_TARGET")));
+    }
+
+    #[test]
+    fn parses_column_definitions() {
+        let cols = parse_columns("alt = 1:1 GLOBAL_POSITION_INT.relative_alt, spd = vfr_hud.groundspeed").unwrap();
+        assert_eq!(cols.len(), 2);
+        assert_eq!(cols[0].name, "alt");
+        assert_eq!((cols[0].sysid, cols[0].compid), (Some(1), Some(1)));
+        assert_eq!(cols[0].msg_type, "GLOBAL_POSITION_INT");
+        assert_eq!(cols[0].field, "relative_alt");
+        assert_eq!(cols[0].to_text(), "alt = 1:1 GLOBAL_POSITION_INT.relative_alt");
+        assert_eq!((cols[1].sysid, cols[1].compid), (None, None));
+        assert_eq!(cols[1].to_text(), "spd = VFR_HUD.groundspeed");
+
+        assert!(parse_columns("").unwrap().is_empty());
+        assert!(parse_columns("noexpr").is_err());
+        assert!(parse_columns("x = HEARTBEAT").is_err()); // missing .field
+        assert!(parse_columns("x = 1:1").is_err()); // missing type
+        assert!(parse_columns("= HEARTBEAT.custom_mode").is_err());
     }
 
     #[test]
