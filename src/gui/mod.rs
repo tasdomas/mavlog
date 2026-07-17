@@ -10,6 +10,7 @@ use crate::core::time::{format_datetime, format_offset, parse_jump, TimeFormat};
 use crate::tlog;
 
 const OPEN_SHORTCUT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::O);
+const SAVE_SHORTCUT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::S);
 const MARK_BG: Color32 = Color32::from_rgb(140, 20, 20);
 
 /// Launch the native GUI window. `session` may be None, in which case the
@@ -43,6 +44,8 @@ struct GuiApp {
     scroll_to_selected: bool,
     /// Rows visible in the list on the last frame, for Page Up/Down.
     visible_rows: usize,
+    /// Whether the Settings window is open.
+    settings_open: bool,
 }
 
 impl GuiApp {
@@ -56,6 +59,7 @@ impl GuiApp {
             jump_error: None,
             scroll_to_selected: false,
             visible_rows: 20,
+            settings_open: false,
         }
     }
 
@@ -125,6 +129,18 @@ impl GuiApp {
         }
     }
 
+    /// Write the current setup to the sidecar, showing the outcome in the
+    /// status bar.
+    fn save_setup(&mut self) {
+        let Some(session) = &self.session else {
+            return;
+        };
+        self.status = Some(match session.save_setup() {
+            Ok(path) => format!("Setup saved to {path}"),
+            Err(err) => err,
+        });
+    }
+
     /// Handle list-navigation keys, unless a text field currently has focus.
     fn handle_nav_keys(&mut self, ctx: &egui::Context) {
         if self.session.is_none() || ctx.memory(|m| m.focused().is_some()) {
@@ -181,8 +197,36 @@ impl GuiApp {
                 if let Some(err) = &self.jump_error {
                     ui.colored_label(Color32::LIGHT_RED, err);
                 }
+                ui.separator();
+                if ui.button("Save setup").clicked() {
+                    self.save_setup();
+                }
+                if ui.button("Settings").clicked() {
+                    self.settings_open = true;
+                }
             }
         });
+    }
+
+    fn settings_window(&mut self, ctx: &egui::Context) {
+        if !self.settings_open {
+            return;
+        }
+        let Some(session) = &mut self.session else {
+            self.settings_open = false;
+            return;
+        };
+        let mut open = true;
+        egui::Window::new("Settings")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.label("Time column:");
+                ui.radio_value(&mut session.time_format, TimeFormat::DateTime, "Date-time");
+                ui.radio_value(&mut session.time_format, TimeFormat::OffsetSecs, "Offset (s)");
+            });
+        self.settings_open = open;
     }
 
     fn list_panel(&mut self, ui: &mut egui::Ui) {
@@ -358,6 +402,9 @@ impl eframe::App for GuiApp {
         if ctx.input_mut(|i| i.consume_shortcut(&OPEN_SHORTCUT)) {
             self.pick_and_open();
         }
+        if ctx.input_mut(|i| i.consume_shortcut(&SAVE_SHORTCUT)) {
+            self.save_setup();
+        }
 
         let dropped = ctx.input(|i| i.raw.dropped_files.clone());
         if let Some(path) = dropped.iter().find_map(|f| f.path.clone()) {
@@ -379,6 +426,8 @@ impl eframe::App for GuiApp {
         }
 
         egui::CentralPanel::default().show(ui, |ui| self.list_panel(ui));
+
+        self.settings_window(&ctx);
 
         if let Some(message) = self.error.clone() {
             let mut dismiss = false;
