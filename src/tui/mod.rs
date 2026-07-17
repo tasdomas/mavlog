@@ -1304,7 +1304,7 @@ impl App {
         body.push('\n');
         body.push_str(&match tlog::decode(&self.session.data, entry) {
             Ok(msg) => format!("{msg:#?}"),
-            Err(_) => hex_dump(&self.session.data[entry.payload.clone()]),
+            Err(_) => tlog::hex_dump(&self.session.data[entry.payload.clone()]),
         });
         let lines: Vec<&str> = body.lines().collect();
 
@@ -1361,19 +1361,5 @@ fn centered_fixed(area: ratatui::layout::Rect, width: u16, height: u16) -> ratat
         .flex(Flex::Center)
         .areas(rect);
     rect
-}
-
-/// Fallback body for messages the dialect can't decode.
-fn hex_dump(payload: &[u8]) -> String {
-    let mut out = String::from("undecodable payload:\n");
-    for (i, chunk) in payload.chunks(16).enumerate() {
-        let hex: Vec<String> = chunk.iter().map(|b| format!("{b:02x}")).collect();
-        let ascii: String = chunk
-            .iter()
-            .map(|&b| if (0x20..0x7f).contains(&b) { b as char } else { '.' })
-            .collect();
-        out.push_str(&format!("{:04x}  {:<47}  {ascii}\n", i * 16, hex.join(" ")));
-    }
-    out
 }
 

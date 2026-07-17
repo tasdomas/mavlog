@@ -24,6 +24,20 @@ pub fn decode(data: &[u8], entry: &LogEntry) -> Result<MavMessage, ParserError> 
     MavMessage::parse(entry.version, entry.msg_id, &data[entry.payload.clone()])
 }
 
+/// Fallback detail-pane body for messages the dialect can't decode.
+pub fn hex_dump(payload: &[u8]) -> String {
+    let mut out = String::from("undecodable payload:\n");
+    for (i, chunk) in payload.chunks(16).enumerate() {
+        let hex: Vec<String> = chunk.iter().map(|b| format!("{b:02x}")).collect();
+        let ascii: String = chunk
+            .iter()
+            .map(|&b| if (0x20..0x7f).contains(&b) { b as char } else { '.' })
+            .collect();
+        out.push_str(&format!("{:04x}  {:<47}  {ascii}\n", i * 16, hex.join(" ")));
+    }
+    out
+}
+
 /// Parse an entire tlog buffer, resyncing on corrupt data by sliding
 /// forward one byte at a time until a plausible record is found.
 pub fn parse(data: &[u8]) -> Vec<LogEntry> {
