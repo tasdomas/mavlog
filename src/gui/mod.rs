@@ -13,6 +13,14 @@ const OPEN_SHORTCUT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND
 const SAVE_SHORTCUT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::S);
 const MARK_BG: Color32 = Color32::from_rgb(140, 20, 20);
 
+/// A context-menu action on a message row, applied after the table body
+/// closure (which only borrows `Session`) finishes.
+enum MarkAction {
+    Add,
+    Remove,
+    EditLabel,
+}
+
 /// Launch the native GUI window. `session` may be None, in which case the
 /// window opens in its empty state awaiting a file.
 pub fn run(session: Option<Session>) -> Result<()> {
@@ -46,6 +54,10 @@ struct GuiApp {
     visible_rows: usize,
     /// Whether the Settings window is open.
     settings_open: bool,
+    /// Entry index currently being labeled, if the label window is open.
+    label_prompt: Option<usize>,
+    /// Text in the label window.
+    label_input: String,
 }
 
 impl GuiApp {
@@ -60,6 +72,8 @@ impl GuiApp {
             scroll_to_selected: false,
             visible_rows: 20,
             settings_open: false,
+            label_prompt: None,
+            label_input: String::new(),
         }
     }
 
@@ -129,6 +143,80 @@ impl GuiApp {
         }
     }
 
+    /// Toggle the mark on the selected message, opening the label window
+    /// when a new mark is added. Unmarking discards the label.
+    fn toggle_mark(&mut self) {
+        let Some(entry_index) = self
+            .session
+            .as_ref()
+            .and_then(Session::selected_entry_index)
+        else {
+            return;
+        };
+        self.toggle_mark_for(entry_index);
+    }
+
+    fn toggle_mark_for(&mut self, entry_index: usize) {
+        let Some(session) = &mut self.session else {
+            return;
+        };
+        let newly_marked = session.marks.remove(&entry_index).is_none();
+        if newly_marked {
+            session.marks.insert(entry_index, String::new());
+        }
+        if newly_marked {
+            self.open_label_editor(entry_index);
+        }
+    }
+
+    /// Open the label window for a message, prefilled with its current label.
+    fn open_label_editor(&mut self, entry_index: usize) {
+        self.label_input = self
+            .session
+            .as_ref()
+            .and_then(|s| s.marks.get(&entry_index).cloned())
+            .unwrap_or_default();
+        self.label_prompt = Some(entry_index);
+    }
+
+    fn label_window(&mut self, ctx: &egui::Context) {
+        let Some(entry_index) = self.label_prompt else {
+            return;
+        };
+        if self.session.is_none() {
+            self.label_prompt = None;
+            return;
+        }
+        let mut save = false;
+        let mut cancel = false;
+        egui::Window::new("Mark label")
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                let response = ui.text_edit_singleline(&mut self.label_input);
+                let submitted =
+                    response.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
+                ui.horizontal(|ui| {
+                    if ui.button("Save").clicked() || submitted {
+                        save = true;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        cancel = true;
+                    }
+                });
+            });
+        if save {
+            if let Some(session) = &mut self.session {
+                session
+                    .marks
+                    .insert(entry_index, self.label_input.trim().to_string());
+            }
+            self.label_prompt = None;
+        } else if cancel {
+            self.label_prompt = None;
+        }
+    }
+
     /// Write the current setup to the sidecar, showing the outcome in the
     /// status bar.
     fn save_setup(&mut self) {
@@ -169,6 +257,9 @@ impl GuiApp {
                 self.select(last);
                 self.scroll_to_selected = true;
             }
+        }
+        if ctx.input(|i| i.key_pressed(Key::Space)) {
+            self.toggle_mark();
         }
     }
 
@@ -267,6 +358,7 @@ impl GuiApp {
         }
 
         let mut clicked_row = None;
+        let mut mark_action: Option<(usize, MarkAction)> = None;
         builder
             .header(20.0, |mut header| {
                 header.col(|ui| {
@@ -327,16 +419,49 @@ impl GuiApp {
                         ui.label(label);
                     });
 
-                    if row.response().clicked() {
+                    let response = row.response();
+                    if response.clicked() {
                         clicked_row = Some(row_index);
                     }
+                    let is_marked = mark.is_some();
+                    response.context_menu(|ui| {
+                        if is_marked {
+                            if ui.button("Edit label").clicked() {
+                                mark_action = Some((entry_index, MarkAction::EditLabel));
+                                ui.close();
+                            }
+                            if ui.button("Remove mark").clicked() {
+                                mark_action = Some((entry_index, MarkAction::Remove));
+                                ui.close();
+                            }
+                        } else if ui.button("Add mark").clicked() {
+                            mark_action = Some((entry_index, MarkAction::Add));
+                            ui.close();
+                        }
+                    });
                 });
             });
 
         if let Some(row_index) = clicked_row {
             session.selected = row_index;
         }
+        let mut open_label_for = None;
+        if let Some((entry_index, action)) = mark_action {
+            match action {
+                MarkAction::Add => {
+                    session.marks.insert(entry_index, String::new());
+                    open_label_for = Some(entry_index);
+                }
+                MarkAction::Remove => {
+                    session.marks.remove(&entry_index);
+                }
+                MarkAction::EditLabel => open_label_for = Some(entry_index),
+            }
+        }
         self.scroll_to_selected = false;
+        if let Some(entry_index) = open_label_for {
+            self.open_label_editor(entry_index);
+        }
     }
 
     fn detail_panel(&self, ui: &mut egui::Ui) {
@@ -428,6 +553,7 @@ impl eframe::App for GuiApp {
         egui::CentralPanel::default().show(ui, |ui| self.list_panel(ui));
 
         self.settings_window(&ctx);
+        self.label_window(&ctx);
 
         if let Some(message) = self.error.clone() {
             let mut dismiss = false;
