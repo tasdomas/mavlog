@@ -35,7 +35,12 @@ content, plus the phase-by-phase TODO). This file is the authoritative state.
 - Baseline: `master` = the original working TUI (commit `f65b883`).
 - Working branch: **`feat/gui-mode`** (all new work here). Working tree clean.
 - Commits so far (newest first):
-  - `9c8d751 feat(gui): message list, detail pane and jump-to-time (Phase 2)`  ← **HEAD**
+  - `afe38b1 feat(gui): Columns window (Phase 3, part 4)`  ← **HEAD**
+  - `3289d77 feat(gui): Filters window (Phase 3, part 3)`
+  - `6e2895f feat(gui): mark toggling, label editor and right-click menu (Phase 3, part 2)`
+  - `532a76c feat(gui): settings window and save-setup shortcut (Phase 3, part 1)`
+  - `1e9162f docs: mark Phase 2 done in handoff notes`
+  - `9c8d751 feat(gui): message list, detail pane and jump-to-time (Phase 2)`
   - `a7cbb9d refactor: move hex_dump into tlog for GUI/TUI sharing`
   - `227f237 docs: mark Phase 1 done in handoff notes`
   - `6e477df feat(gui): open files via dialog, drag-and-drop, and error modal`
@@ -62,7 +67,8 @@ Core is frontend-agnostic — it must never import ratatui/crossterm/egui.
 src/
   main.rs        — entry point: arg parsing (-tui/--tui, optional FILE),
                    loads a Session, dispatches to gui::run (default) or tui::run.
-  tlog.rs        — tlog/MAVLink parser (unchanged from before this work).
+  tlog.rs        — tlog/MAVLink parser, plus hex_dump (moved here from the TUI
+                   in a7cbb9d so the GUI detail pane can share it) (+tests).
   core/
     mod.rs       — declares submodules
     time.rs      — TimeFormat, format_datetime, format_offset, parse_jump (+tests)
@@ -76,8 +82,18 @@ src/
                    terminal view state (offset, focus, detail_scroll, popups,
                    prompts, status). All key handling + drawing live here.
   gui/
-    mod.rs       — eframe frontend. `pub fn run(Option<Session>)`. GuiApp so far
-                   is just the shell (toolbar/status/central, empty state).
+    mod.rs       — eframe frontend. `pub fn run(Option<Session>)`. GuiApp owns
+                   an `Option<Session>`, all GUI-only view state (jump/label
+                   input buffers, scroll_to_selected, window-open flags), and
+                   the toolbar/status/list/detail panels. Ctrl/Cmd+O opens,
+                   Ctrl/Cmd+S saves the setup sidecar; drag-and-drop opens too.
+    widgets.rs   — searchable_combo: an egui::ComboBox with a type-to-filter
+                   search box in its popup (reuses core::filter::match_labels),
+                   shared by the filter and column editors.
+    filters.rs   — Filters window: list + dropdown-based editor (id/type) +
+                   Save/Cancel, mirrors the TUI's FilterEditor.
+    columns.rs   — Columns window: list + editor (name/id/type/field) +
+                   Save/Cancel, mirrors the TUI's ColumnEditor.
 ```
 
 ### `Session` (src/core/session.rs) — the shared heart
@@ -143,7 +159,7 @@ Done and committed (`da77a4e`, `6e477df`):
   confirmed** — do that on a real macOS session before calling Phase 1 fully
   closed out.
 
-### Phase 2 — DONE (this is where you resume: Phase 3)
+### Phase 2 — DONE
 Done and committed (`9c8d751`):
 - `src/gui/mod.rs::list_panel`: virtualized message table via
   `egui_extras::TableBuilder` (columns #/TIME/SYS:CMP/MESSAGE/any custom
@@ -178,13 +194,48 @@ Done and committed (`9c8d751`):
   after each commit; GUI window itself still not visually confirmed in this
   sandbox (no attached display) — check on a real macOS session.
 
-### Phases 3–5 — NOT STARTED (summary; full detail in the ~/.claude plan)
-- **Phase 3 — filters/columns/marks/settings parity**: a shared searchable
-  dropdown widget (`gui/widgets.rs`, reuse `match_labels`); Filters window
-  (list/editor + chips + "x of y" count); Columns window (name/id/type/field
-  editor, field options from `Session::field_options`); marks (Space + label
-  popup + right-click context menu); Settings (time format radio); Save setup
-  (Ctrl/Cmd+S). Cross-check: a setup saved in the GUI loads in the TUI.
+### Phase 3 — DONE (this is where you resume: Phase 4)
+Done and committed (`532a76c`, `6e2895f`, `3289d77`, `afe38b1`):
+- **Settings + Save** (`532a76c`): toolbar "Settings" button opens an
+  `egui::Window` with a Time-column radio group bound straight to
+  `Session::time_format` (no apply step needed — the list/detail panes read
+  it live every frame). "Save setup" button + Ctrl/Cmd+S both call
+  `Session::save_setup`, reporting the outcome in the status bar.
+- **Marks** (`6e2895f`): Space toggles the mark on the selected row (gated
+  by `ctx.memory(|m| m.focused().is_none())`, same guard as list nav, so it
+  doesn't fire while a text field has focus); adding a mark opens the "Mark
+  label" window (`GuiApp::label_prompt`/`label_input`) prefilled empty,
+  removing one discards the label — same semantics as the TUI's
+  `toggle_mark`. Right-click any row for a context menu (unmarked: "Add
+  mark"; marked: "Edit label" / "Remove mark") via `Response::context_menu`;
+  the menu only records a `MarkAction` into a local, applied to
+  `session.marks` after `TableBuilder::body()` returns (kept the
+  nested-closure borrows simple rather than mutating `Session` from inside
+  them).
+- **Filters window** (`3289d77`, `src/gui/filters.rs`): lists filters as
+  `to_text()` rows with Edit/Remove, an "x of y messages shown" count, and a
+  dropdown-based editor (pick an id — any or a sysid:compid pair — and/or an
+  exact type) with Save/Cancel, mirroring the TUI's `FilterEditor`. Saving
+  calls `Session::rebuild_filter_text` + `apply_filter`.
+- **Columns window** (`afe38b1`, `src/gui/columns.rs`): lists columns as
+  `to_text()` rows with Edit/Remove, plus a Name/Id/Type/Field editor.
+  Changing Type clears the chosen Field (fields belong to a type). Save is
+  rejected with an inline error if no field is picked. Saving calls
+  `Session::set_columns`.
+- **Shared widget** (`src/gui/widgets.rs::searchable_combo`): an
+  `egui::ComboBox` with a type-to-filter search box in its popup (reuses
+  `core::filter::match_labels`), used by both the filter and column editors
+  in place of hand-rolling the TUI's keyboard dropdown.
+- Cross-check claim (a setup saved in the GUI loads in the TUI) holds by
+  construction: the GUI editors mutate the same `Session.filters` /
+  `Session.columns` / `Session.marks` / `Session.time_format` fields the TUI
+  does, through the same `Session::save_setup`/`load_setup` and `Setup`
+  sidecar format — not yet re-verified end-to-end with a live GUI session
+  in this sandbox (no attached display; see the Phase 1 note).
+- `cargo build`/`cargo test` (15/15) verified green after each of the four
+  commits above.
+
+### Phases 4–5 — NOT STARTED (summary; full detail in the ~/.claude plan)
 - **Phase 4 — plots (the motivating feature)**: add `core::plot.rs`
   (`PlotDef { name, series: Vec<SeriesDef> }`, `SeriesDef { sysid, compid,
   msg_type, field }`, extraction reusing the column `matches` scan → decode →
