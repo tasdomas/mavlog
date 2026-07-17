@@ -1,6 +1,9 @@
 //! The graphical (egui/eframe) frontend. Owns an optional `Session` (none
 //! until a file is opened) plus GUI-only view state.
 
+mod filters;
+mod widgets;
+
 use anyhow::{anyhow, Result};
 use eframe::egui::{self, Align, Color32, Key, KeyboardShortcut, Modifiers};
 use egui_extras::{Column, TableBuilder};
@@ -58,6 +61,9 @@ struct GuiApp {
     label_prompt: Option<usize>,
     /// Text in the label window.
     label_input: String,
+    /// Whether the Filters window is open.
+    filters_open: bool,
+    filters_state: filters::FiltersState,
 }
 
 impl GuiApp {
@@ -74,6 +80,8 @@ impl GuiApp {
             settings_open: false,
             label_prompt: None,
             label_input: String::new(),
+            filters_open: false,
+            filters_state: filters::FiltersState::default(),
         }
     }
 
@@ -289,6 +297,9 @@ impl GuiApp {
                     ui.colored_label(Color32::LIGHT_RED, err);
                 }
                 ui.separator();
+                if ui.button("Filters").clicked() {
+                    self.filters_open = true;
+                }
                 if ui.button("Save setup").clicked() {
                     self.save_setup();
                 }
@@ -554,6 +565,13 @@ impl eframe::App for GuiApp {
 
         self.settings_window(&ctx);
         self.label_window(&ctx);
+        if self.filters_open {
+            if let Some(session) = &mut self.session {
+                filters::show(&ctx, &mut self.filters_open, session, &mut self.filters_state);
+            } else {
+                self.filters_open = false;
+            }
+        }
 
         if let Some(message) = self.error.clone() {
             let mut dismiss = false;
