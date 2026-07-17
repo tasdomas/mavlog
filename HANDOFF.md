@@ -35,7 +35,9 @@ content, plus the phase-by-phase TODO). This file is the authoritative state.
 - Baseline: `master` = the original working TUI (commit `f65b883`).
 - Working branch: **`feat/gui-mode`** (all new work here). Working tree clean.
 - Commits so far (newest first):
-  - `da77a4e feat(gui): add eframe app shell and mode dispatch`  ← **HEAD**
+  - `6e477df feat(gui): open files via dialog, drag-and-drop, and error modal`  ← **HEAD**
+  - `50cf244 docs: add session handoff notes`
+  - `da77a4e feat(gui): add eframe app shell and mode dispatch`
   - `7ab5211 refactor: move TUI into its own module`
   - `d1791e6 test: cover Session filter, jump and setup roundtrip`
   - `c25dc46 refactor: introduce core::session::Session owning domain state`
@@ -110,28 +112,33 @@ reaching state through `self.session`). 15 unit tests pass. TUI behavior
 verified unchanged (filter, custom column, offset time, mark+label, save,
 auto-load) via tmux smoke tests.
 
-### Phase 1 — PARTIALLY DONE (this is where you resume)
-Done and committed (`da77a4e`):
+### Phase 1 — DONE (this is where you resume: Phase 2)
+Done and committed (`da77a4e`, `6e477df`):
 - Deps added: `eframe` 0.35, `egui_extras` 0.35, `egui_plot` 0.36, `rfd` 0.17
   (all unify on a single `egui` 0.35).
-- `src/gui/mod.rs`: minimal shell — top toolbar (a placeholder "Open…" button +
-  file summary label), bottom status bar (shows setup-load result), central
-  panel showing the loaded-file summary or an empty-state message. Auto-runs
+- `src/gui/mod.rs`: top toolbar ("Open…" button + file summary label), bottom
+  status bar (shows setup-load result), central panel showing the loaded-file
+  summary or an empty-state message with its own Open button. Auto-runs
   `Session::load_setup()` on start.
-- `main.rs`: arg parsing + dispatch (GUI default; `-tui` requires a file).
-
-**REMAINING for Phase 1 (do this first next session):**
-1. Wire the toolbar **"Open…"** button to `rfd::FileDialog::new().pick_file()`,
-   plus a Ctrl/Cmd+O shortcut.
-2. **Drag-and-drop**: read `ui.ctx().input(|i| i.raw.dropped_files.clone())` and
-   open the first dropped file.
-3. On open: read+parse the file with the same logic as `main::load_session`
-   (factor it into a reusable helper — currently in `main.rs`), build a
-   `Session`, run `load_setup()`, replace `GuiApp::session`.
-4. **Parse-error modal**: if load fails (unreadable / no MAVLink messages), show
-   an `egui::Window` (or `egui::Modal`) with the error instead of crashing.
-5. Empty-state polish: a centered "Open a .tlog file" with an Open button.
-6. Phase 1 gate: `cargo run -- sample.tlog` opens on macOS; warning-free build.
+- `main.rs`: arg parsing + dispatch (GUI default; `-tui` requires a file);
+  `load_session` is now `pub(crate)` so the GUI can call it too.
+- Toolbar **"Open…"** button and a Ctrl/Cmd+O `KeyboardShortcut` both call
+  `rfd::FileDialog::new().add_filter("MAVLink tlog", &["tlog"]).pick_file()`.
+- **Drag-and-drop**: `ctx().input(|i| i.raw.dropped_files.clone())` is checked
+  every frame; the first dropped file with a native `path` is opened.
+- Both paths funnel through `GuiApp::open_path`, which calls
+  `crate::load_session`, reloads the setup sidecar, and replaces
+  `GuiApp::session` on success.
+- **Parse-error modal**: on failure `open_path` sets `GuiApp::error`, shown next
+  frame in an `egui::Window::new("Failed to open file")` with an OK button
+  (no crash).
+- Empty-state polish: centered hint text + an inline Open button.
+- Phase 1 gate: `cargo build` is warning-free, `cargo test` passes (15/15), and
+  `cargo run -- sample.tlog` runs without panicking. Note: this sandbox has no
+  attached display (`screencapture` fails with "could not create image from
+  display"), so the window's actual on-screen appearance is **not yet visually
+  confirmed** — do that on a real macOS session before calling Phase 1 fully
+  closed out.
 
 ### Phases 2–5 — NOT STARTED (summary; full detail in the ~/.claude plan)
 - **Phase 2 — list & detail parity**: virtualized message table via
