@@ -35,8 +35,10 @@ fn main() -> Result<()> {
     }
 }
 
-/// Read and parse a tlog file into a Session.
-fn load_session(path: &str) -> Result<Session> {
+/// Read and parse a tlog file into a Session. Shared by both frontends: the
+/// TUI needs a file up front, the GUI calls this again each time the user
+/// opens or drops one.
+pub(crate) fn load_session(path: &str) -> Result<Session> {
     let data = fs::read(path).with_context(|| format!("failed to read {path}"))?;
     let entries = tlog::parse(&data);
     if entries.is_empty() {
