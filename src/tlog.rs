@@ -1,7 +1,9 @@
 //! Parser for tlog files: a stream of records, each an 8-byte big-endian
 //! microsecond timestamp followed by a raw MAVLink v1 or v2 frame.
 
-use mavlink::{dialects::ardupilotmega::MavMessage, MavlinkVersion, Message};
+use std::ops::Range;
+
+use mavlink::{dialects::ardupilotmega::MavMessage, error::ParserError, MavlinkVersion, Message};
 
 pub const MAGIC_V1: u8 = 0xFE;
 pub const MAGIC_V2: u8 = 0xFD;
@@ -10,7 +12,16 @@ pub struct LogEntry {
     pub timestamp_us: u64,
     pub sysid: u8,
     pub compid: u8,
+    pub msg_id: u32,
+    pub version: MavlinkVersion,
+    /// Byte range of the payload within the log buffer.
+    pub payload: Range<usize>,
     pub name: String,
+}
+
+/// Decode the full message for an entry parsed from `data`.
+pub fn decode(data: &[u8], entry: &LogEntry) -> Result<MavMessage, ParserError> {
+    MavMessage::parse(entry.version, entry.msg_id, &data[entry.payload.clone()])
 }
 
 /// Parse an entire tlog buffer, resyncing on corrupt data by sliding
@@ -26,15 +37,15 @@ pub fn parse(data: &[u8]) -> Vec<LogEntry> {
             MAGIC_V2 => parse_v2(frame),
             _ => None,
         };
-        let Some((entry_no_ts, frame_len)) = parsed else {
+        let Some((mut entry, frame_len)) = parsed else {
             pos += 1;
             continue;
         };
-        let timestamp_us = u64::from_be_bytes(data[pos..pos + 8].try_into().unwrap());
-        entries.push(LogEntry {
-            timestamp_us,
-            ..entry_no_ts
-        });
+        entry.timestamp_us = u64::from_be_bytes(data[pos..pos + 8].try_into().unwrap());
+        // Rebase the payload range from frame-relative to buffer-relative.
+        entry.payload.start += pos + 8;
+        entry.payload.end += pos + 8;
+        entries.push(entry);
         pos += 8 + frame_len;
     }
     entries
@@ -52,7 +63,7 @@ fn parse_v1(frame: &[u8]) -> Option<(LogEntry, usize)> {
     }
     let msg_id = frame[5] as u32;
     Some((
-        entry(MavlinkVersion::V1, frame[3], frame[4], msg_id, &frame[6..6 + len]),
+        entry(MavlinkVersion::V1, frame[3], frame[4], msg_id, frame, 6..6 + len),
         total,
     ))
 }
@@ -70,7 +81,7 @@ fn parse_v2(frame: &[u8]) -> Option<(LogEntry, usize)> {
     }
     let msg_id = u32::from_le_bytes([frame[7], frame[8], frame[9], 0]);
     Some((
-        entry(MavlinkVersion::V2, frame[5], frame[6], msg_id, &frame[10..10 + len]),
+        entry(MavlinkVersion::V2, frame[5], frame[6], msg_id, frame, 10..10 + len),
         total,
     ))
 }
@@ -80,9 +91,10 @@ fn entry(
     sysid: u8,
     compid: u8,
     msg_id: u32,
-    payload: &[u8],
+    frame: &[u8],
+    payload: Range<usize>,
 ) -> LogEntry {
-    let name = match MavMessage::parse(version, msg_id, payload) {
+    let name = match MavMessage::parse(version, msg_id, &frame[payload.clone()]) {
         Ok(msg) => msg.message_name().to_string(),
         Err(_) => format!("UNKNOWN({msg_id})"),
     };
@@ -90,6 +102,9 @@ fn entry(
         timestamp_us: 0,
         sysid,
         compid,
+        msg_id,
+        version,
+        payload,
         name,
     }
 }
@@ -124,6 +139,17 @@ mod tests {
         assert_eq!(entries[1].timestamp_us, 2_000_000);
         assert_eq!(entries[1].name, "HEARTBEAT");
         assert_eq!(entries[1].sysid, 1);
+    }
+
+    #[test]
+    fn decodes_payload_fields() {
+        let data = record(1_000_000, V2_HEARTBEAT);
+        let entries = parse(&data);
+        let msg = decode(&data, &entries[0]).unwrap();
+        let MavMessage::HEARTBEAT(hb) = msg else {
+            panic!("expected HEARTBEAT, got {msg:?}");
+        };
+        assert_eq!(hb.mavlink_version, 3);
     }
 
     #[test]
