@@ -1,0 +1,11 @@
+[package]
+name = "mavlog"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.103"
+chrono = "0.4.45"
+crossterm = "0.29.0"
+mavlink = { version = "0.18.0", default-features = false, features = ["std", "dialect-ardupilotmega"] }
+ratatui = "0.30.2"
