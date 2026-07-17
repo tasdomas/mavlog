@@ -6,10 +6,10 @@ use anyhow::{bail, Context, Result};
 use chrono::DateTime;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, MouseEventKind};
 use ratatui::{
-    layout::{Constraint, Layout},
+    layout::{Constraint, Flex, Layout},
     style::{Color, Modifier, Style},
     text::Line,
-    widgets::{Block, Paragraph, Row, Table, Wrap},
+    widgets::{Block, Clear, Paragraph, Row, Table, Wrap},
     DefaultTerminal, Frame,
 };
 
@@ -37,15 +37,52 @@ enum Focus {
     Detail,
 }
 
+#[derive(PartialEq, Clone, Copy)]
+enum TimeFormat {
+    DateTime,
+    OffsetSecs,
+}
+
+struct Settings {
+    time_format: TimeFormat,
+}
+
+/// One row in the settings menu: a label plus accessors for cycling and
+/// showing the current value.
+struct SettingItem {
+    label: &'static str,
+    value: fn(&Settings) -> &'static str,
+    toggle: fn(&mut Settings),
+}
+
+const SETTING_ITEMS: &[SettingItem] = &[SettingItem {
+    label: "Time column",
+    value: |s| match s.time_format {
+        TimeFormat::DateTime => "date-time",
+        TimeFormat::OffsetSecs => "offset (s)",
+    },
+    toggle: |s| {
+        s.time_format = match s.time_format {
+            TimeFormat::DateTime => TimeFormat::OffsetSecs,
+            TimeFormat::OffsetSecs => TimeFormat::DateTime,
+        }
+    },
+}];
+
 struct App {
     path: String,
     data: Vec<u8>,
     entries: Vec<tlog::LogEntry>,
+    /// Timestamp of the first message; offsets are relative to it.
+    start_us: u64,
     selected: usize,
     offset: usize,
     view_height: usize,
     focus: Focus,
     detail_scroll: usize,
+    settings: Settings,
+    settings_open: bool,
+    settings_selected: usize,
 }
 
 impl App {
@@ -53,12 +90,18 @@ impl App {
         Self {
             path,
             data,
+            start_us: entries[0].timestamp_us,
             entries,
             selected: 0,
             offset: 0,
             view_height: 1,
             focus: Focus::List,
             detail_scroll: 0,
+            settings: Settings {
+                time_format: TimeFormat::DateTime,
+            },
+            settings_open: false,
+            settings_selected: 0,
         }
     }
 
@@ -72,6 +115,9 @@ impl App {
                     }
                 }
                 Event::Mouse(mouse) => {
+                    if self.settings_open {
+                        continue;
+                    }
                     let delta = match mouse.kind {
                         MouseEventKind::ScrollUp => -3,
                         MouseEventKind::ScrollDown => 3,
@@ -86,8 +132,13 @@ impl App {
 
     /// Returns false when the app should quit.
     fn handle_key(&mut self, code: KeyCode) -> bool {
+        if self.settings_open {
+            self.handle_settings_key(code);
+            return true;
+        }
         match code {
             KeyCode::Char('q') => return false,
+            KeyCode::Char('s') => self.settings_open = true,
             KeyCode::Esc => {
                 if self.focus == Focus::Detail {
                     self.focus = Focus::List;
@@ -118,6 +169,30 @@ impl App {
             _ => {}
         }
         true
+    }
+
+    fn handle_settings_key(&mut self, code: KeyCode) {
+        match code {
+            KeyCode::Char('q') | KeyCode::Char('s') | KeyCode::Esc => {
+                self.settings_open = false
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.settings_selected = self.settings_selected.saturating_sub(1)
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.settings_selected =
+                    (self.settings_selected + 1).min(SETTING_ITEMS.len() - 1)
+            }
+            KeyCode::Enter
+            | KeyCode::Char(' ')
+            | KeyCode::Left
+            | KeyCode::Right
+            | KeyCode::Char('h')
+            | KeyCode::Char('l') => {
+                (SETTING_ITEMS[self.settings_selected].toggle)(&mut self.settings)
+            }
+            _ => {}
+        }
     }
 
     /// Scroll whichever pane has focus.
@@ -165,9 +240,13 @@ impl App {
         self.draw_detail(frame, detail_area);
 
         let position = format!("{}/{} ", self.selected + 1, self.entries.len());
-        let hints = match self.focus {
-            Focus::List => " ↑/↓ select  PgUp/PgDn  g/G top/bottom  →/Tab details  q quit",
-            Focus::Detail => " ↑/↓ scroll  PgUp/PgDn  g/G top/bottom  ←/Esc back to list  q quit",
+        let hints = if self.settings_open {
+            " ↑/↓ select  Enter/Space toggle  Esc close"
+        } else {
+            match self.focus {
+                Focus::List => " ↑/↓ select  PgUp/PgDn  g/G top/bottom  →/Tab details  s settings  q quit",
+                Focus::Detail => " ↑/↓ scroll  PgUp/PgDn  ←/Esc back to list  s settings  q quit",
+            }
         };
         frame.render_widget(
             Line::styled(
@@ -180,6 +259,49 @@ impl App {
             ),
             footer_area,
         );
+
+        if self.settings_open {
+            self.draw_settings(frame);
+        }
+    }
+
+    fn draw_settings(&self, frame: &mut Frame) {
+        let width = 40;
+        let height = SETTING_ITEMS.len() as u16 + 2;
+        let [area] = Layout::vertical([Constraint::Length(height)])
+            .flex(Flex::Center)
+            .areas(frame.area());
+        let [area] = Layout::horizontal([Constraint::Length(width)])
+            .flex(Flex::Center)
+            .areas(area);
+
+        let inner_width = (width as usize).saturating_sub(2);
+        let lines: Vec<Line> = SETTING_ITEMS
+            .iter()
+            .enumerate()
+            .map(|(i, item)| {
+                let value = format!("◂ {} ▸", (item.value)(&self.settings));
+                let text = format!(
+                    " {}{value:>vw$} ",
+                    item.label,
+                    vw = inner_width.saturating_sub(item.label.len() + 2),
+                );
+                if i == self.settings_selected {
+                    Line::styled(text, Style::new().add_modifier(Modifier::REVERSED))
+                } else {
+                    Line::raw(text)
+                }
+            })
+            .collect();
+
+        let block = Block::bordered()
+            .title(Line::styled(
+                " Settings ",
+                Style::new().add_modifier(Modifier::BOLD),
+            ))
+            .border_style(Style::new().fg(Color::Cyan));
+        frame.render_widget(Clear, area);
+        frame.render_widget(Paragraph::new(lines).block(block), area);
     }
 
     fn draw_list(&mut self, frame: &mut Frame, area: ratatui::layout::Rect) {
@@ -199,6 +321,10 @@ impl App {
         } else {
             Style::new().fg(Color::Black).bg(Color::DarkGray)
         };
+        let time_width = match self.settings.time_format {
+            TimeFormat::DateTime => 23,
+            TimeFormat::OffsetSecs => 12,
+        };
         let rows = self.entries[self.offset..end]
             .iter()
             .enumerate()
@@ -206,7 +332,7 @@ impl App {
                 let index = self.offset + i;
                 let row = Row::new(vec![
                     format!("{index:>7}"),
-                    format_time(entry.timestamp_us),
+                    self.format_list_time(entry.timestamp_us),
                     format!("{:>3}:{:<3}", entry.sysid, entry.compid),
                     entry.name.clone(),
                 ]);
@@ -221,7 +347,7 @@ impl App {
             rows,
             [
                 Constraint::Length(7),
-                Constraint::Length(12),
+                Constraint::Length(time_width),
                 Constraint::Length(7),
                 Constraint::Fill(1),
             ],
@@ -236,10 +362,15 @@ impl App {
 
     fn draw_detail(&mut self, frame: &mut Frame, area: ratatui::layout::Rect) {
         let entry = &self.entries[self.selected];
-        let body = match tlog::decode(&self.data, entry) {
+        let mut body = format!(
+            "Time: {}  ({})\n\n",
+            format_datetime(entry.timestamp_us),
+            format_offset(entry.timestamp_us, self.start_us),
+        );
+        body.push_str(&match tlog::decode(&self.data, entry) {
             Ok(msg) => format!("{msg:#?}"),
             Err(_) => hex_dump(&self.data[entry.payload.clone()]),
-        };
+        });
         let lines: Vec<&str> = body.lines().collect();
 
         let inner_height = (area.height as usize).saturating_sub(2);
@@ -247,12 +378,7 @@ impl App {
             .detail_scroll
             .min(lines.len().saturating_sub(inner_height));
 
-        let title = format!(
-            " {} (id {})  {} ",
-            entry.name,
-            entry.msg_id,
-            format_datetime(entry.timestamp_us),
-        );
+        let title = format!(" {} (id {}) ", entry.name, entry.msg_id);
         let mut block = self
             .pane_block(Focus::Detail)
             .title(Line::styled(title, Style::new().add_modifier(Modifier::BOLD)));
@@ -281,20 +407,26 @@ impl App {
     }
 
     fn pane_block(&self, pane: Focus) -> Block<'static> {
-        let color = if self.focus == pane {
+        let color = if self.focus == pane && !self.settings_open {
             Color::Cyan
         } else {
             Color::DarkGray
         };
         Block::bordered().border_style(Style::new().fg(color))
     }
+
+    fn format_list_time(&self, timestamp_us: u64) -> String {
+        match self.settings.time_format {
+            TimeFormat::DateTime => format_datetime(timestamp_us),
+            TimeFormat::OffsetSecs => format_offset(timestamp_us, self.start_us),
+        }
+    }
 }
 
-fn format_time(timestamp_us: u64) -> String {
-    match DateTime::from_timestamp_micros(timestamp_us as i64) {
-        Some(dt) => dt.format("%H:%M:%S%.3f").to_string(),
-        None => format!("({timestamp_us} us)"),
-    }
+/// Seconds relative to the start of the log, e.g. "T+4.600s".
+fn format_offset(timestamp_us: u64, start_us: u64) -> String {
+    let secs = (timestamp_us as i64 - start_us as i64) as f64 / 1e6;
+    format!("T{secs:+.3}s")
 }
 
 fn format_datetime(timestamp_us: u64) -> String {
