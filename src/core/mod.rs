@@ -3,5 +3,6 @@
 
 pub mod column;
 pub mod filter;
+pub mod session;
 pub mod setup;
 pub mod time;
