@@ -86,7 +86,7 @@ pub fn show(ctx: &egui::Context, open: &mut bool, session: &mut Session, state: 
                         ui,
                         "filter_id",
                         &label,
-                        &id_labels(session),
+                        &session.filter_dropdown_labels(0),
                         &mut editor.id_query,
                     ) {
                         editor.id_choice = choice;
@@ -99,7 +99,7 @@ pub fn show(ctx: &egui::Context, open: &mut bool, session: &mut Session, state: 
                         ui,
                         "filter_type",
                         &label,
-                        &type_labels(session),
+                        &session.filter_dropdown_labels(1),
                         &mut editor.type_query,
                     ) {
                         editor.type_choice = choice;
@@ -162,12 +162,4 @@ fn editor_for(session: &Session, index: Option<usize>) -> FilterEditor {
         id_query: String::new(),
         type_query: String::new(),
     }
-}
-
-fn id_labels(session: &Session) -> Vec<String> {
-    (0..=session.id_options.len()).map(|i| session.id_option_text(i)).collect()
-}
-
-fn type_labels(session: &Session) -> Vec<String> {
-    (0..=session.type_options.len()).map(|i| session.type_option_text(i)).collect()
 }

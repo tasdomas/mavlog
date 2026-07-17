@@ -89,7 +89,7 @@ pub fn show(ctx: &egui::Context, open: &mut bool, session: &mut Session, state: 
                         ui,
                         "column_id",
                         &label,
-                        &id_labels(session),
+                        &session.column_dropdown_labels(1, editor.type_choice),
                         &mut editor.id_query,
                     ) {
                         editor.id_choice = choice;
@@ -116,9 +116,7 @@ pub fn show(ctx: &egui::Context, open: &mut bool, session: &mut Session, state: 
                 });
                 ui.horizontal(|ui| {
                     ui.label("Field:");
-                    let field_options = session.field_options(
-                        session.type_options.get(editor.type_choice).map_or("", String::as_str),
-                    );
+                    let field_options = session.column_dropdown_labels(3, editor.type_choice);
                     let label = if editor.field.is_empty() { "(pick a field)" } else { &editor.field };
                     if let Some(choice) = searchable_combo(
                         ui,
@@ -200,8 +198,4 @@ fn editor_for(session: &Session, index: Option<usize>) -> ColumnEditor {
         type_query: String::new(),
         field_query: String::new(),
     }
-}
-
-fn id_labels(session: &Session) -> Vec<String> {
-    (0..=session.id_options.len()).map(|i| session.id_option_text(i)).collect()
 }
