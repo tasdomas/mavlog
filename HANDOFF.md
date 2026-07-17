@@ -35,7 +35,10 @@ content, plus the phase-by-phase TODO). This file is the authoritative state.
 - Baseline: `master` = the original working TUI (commit `f65b883`).
 - Working branch: **`feat/gui-mode`** (all new work here). Working tree clean.
 - Commits so far (newest first):
-  - `6e477df feat(gui): open files via dialog, drag-and-drop, and error modal`  ← **HEAD**
+  - `9c8d751 feat(gui): message list, detail pane and jump-to-time (Phase 2)`  ← **HEAD**
+  - `a7cbb9d refactor: move hex_dump into tlog for GUI/TUI sharing`
+  - `227f237 docs: mark Phase 1 done in handoff notes`
+  - `6e477df feat(gui): open files via dialog, drag-and-drop, and error modal`
   - `50cf244 docs: add session handoff notes`
   - `da77a4e feat(gui): add eframe app shell and mode dispatch`
   - `7ab5211 refactor: move TUI into its own module`
@@ -112,7 +115,7 @@ reaching state through `self.session`). 15 unit tests pass. TUI behavior
 verified unchanged (filter, custom column, offset time, mark+label, save,
 auto-load) via tmux smoke tests.
 
-### Phase 1 — DONE (this is where you resume: Phase 2)
+### Phase 1 — DONE
 Done and committed (`da77a4e`, `6e477df`):
 - Deps added: `eframe` 0.35, `egui_extras` 0.35, `egui_plot` 0.36, `rfd` 0.17
   (all unify on a single `egui` 0.35).
@@ -140,13 +143,42 @@ Done and committed (`da77a4e`, `6e477df`):
   confirmed** — do that on a real macOS session before calling Phase 1 fully
   closed out.
 
-### Phases 2–5 — NOT STARTED (summary; full detail in the ~/.claude plan)
-- **Phase 2 — list & detail parity**: virtualized message table via
-  `egui_extras::TableBuilder` (columns #/TIME/SYS:CMP/MESSAGE/custom/LABEL;
-  keyboard+mouse selection; follow-scroll; marked rows red bg; TIME per format).
-  Detail side panel (`egui::SidePanel`) with the same decoded `{msg:#?}` body +
-  hex-dump fallback and Time/offset/Mark lines. Jump-to-time toolbar box wired to
-  `parse_jump` + `Session::jump_to_time`.
+### Phase 2 — DONE (this is where you resume: Phase 3)
+Done and committed (`9c8d751`):
+- `src/gui/mod.rs::list_panel`: virtualized message table via
+  `egui_extras::TableBuilder` (columns #/TIME/SYS:CMP/MESSAGE/any custom
+  columns already present in `session.columns`/LABEL). Row height from
+  `ui.text_style_height`. Selection follows keyboard (arrows, Page Up/Down,
+  Home/End — gated on `ctx.memory(|m| m.focused().is_none())` so they don't
+  steal input from the jump box) and mouse clicks (via `row.response()` with
+  `sense(egui::Sense::click())`). Marked rows get a red background painted
+  per-cell with `ui.painter().rect_filled` (the `cell()` helper) since
+  `egui_extras` only exposes boolean selected/hovered/striped flags, not
+  arbitrary row colors; the selected row uses `row.set_selected(true)`
+  (egui's built-in highlight) which always wins over the mark color, same
+  precedence as the TUI.
+- `GuiApp::scroll_to_selected` + `TableBuilder::scroll_to_row(_, Align::Center)`
+  implement follow-scroll, but it's only set by keyboard nav / jump-to-time,
+  never by a mouse click — a click should never fight the user for scroll
+  position.
+- `src/gui/mod.rs::detail_panel`: right `egui::Panel::right("detail")` with
+  name/id header, `Time: … (offset)` line, a `Mark: ●` line when marked, then
+  the decoded `{msg:#?}` (or `tlog::hex_dump` fallback) in a scrollable
+  `egui::TextEdit::multiline` (kept interactive so text stays
+  selectable/copyable; edits are harmless since the buffer is rebuilt from
+  `Session` every frame and never written back).
+- Toolbar jump-to-time box wired to `core::time::parse_jump` +
+  `Session::jump_to_time`, Enter-to-submit, inline red error label on parse
+  failure.
+- `tlog::hex_dump` (moved out of `tui/mod.rs` in `a7cbb9d`) is now shared
+  between both frontends.
+- Not yet done, deferred to Phase 3 per the original plan: creating/editing
+  filters, columns, or marks from the GUI — the table only *renders* whatever
+  a loaded setup sidecar already populated. `cargo build`/`cargo test` verified
+  after each commit; GUI window itself still not visually confirmed in this
+  sandbox (no attached display) — check on a real macOS session.
+
+### Phases 3–5 — NOT STARTED (summary; full detail in the ~/.claude plan)
 - **Phase 3 — filters/columns/marks/settings parity**: a shared searchable
   dropdown widget (`gui/widgets.rs`, reuse `match_labels`); Filters window
   (list/editor + chips + "x of y" count); Columns window (name/id/type/field
