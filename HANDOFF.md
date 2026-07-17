@@ -3,6 +3,12 @@
 Self-contained pickup notes for continuing the graphical-UI work. If you are a
 fresh session, read this top to bottom before touching code.
 
+**Status: all 5 planned phases (0–5) are done and committed.** What's left is
+polish/verification, not missing features — see the end of each phase's entry
+below for open follow-ups (mainly: no live display in this sandbox to visually
+confirm the GUI, so a real macOS/Linux/Windows session should still eyeball it
+before considering this "shipped").
+
 ## What this project is
 
 `mavlog` is a viewer for MAVLink `.tlog` files. Until recently it was a pure
@@ -35,7 +41,12 @@ content, plus the phase-by-phase TODO). This file is the authoritative state.
 - Baseline: `master` = the original working TUI (commit `f65b883`).
 - Working branch: **`feat/gui-mode`** (all new work here). Working tree clean.
 - Commits so far (newest first):
-  - `afe38b1 feat(gui): Columns window (Phase 3, part 4)`  ← **HEAD**
+  - `e939c62 docs: add README (Phase 5, part 2)`  ← **HEAD**
+  - `3809459 feat(gui): Esc-to-close audit and Help window (Phase 5, part 1)`
+  - `2d6387c feat: plots — data model, extraction and GUI (Phase 4)`
+  - `9f36ad3 docs: mark Phase 3 done in handoff notes`
+  - `61d7e53 refactor: reuse Session::filter_dropdown_labels/column_dropdown_labels`
+  - `afe38b1 feat(gui): Columns window (Phase 3, part 4)`
   - `3289d77 feat(gui): Filters window (Phase 3, part 3)`
   - `6e2895f feat(gui): mark toggling, label editor and right-click menu (Phase 3, part 2)`
   - `532a76c feat(gui): settings window and save-setup shortcut (Phase 3, part 1)`
@@ -75,7 +86,10 @@ src/
     filter.rs    — FilterExpr {matches,to_text}, parse_filters, name_matches,
                    match_labels (+tests)
     column.rs    — CustomColumn {to_text}, parse_columns (+tests)
-    setup.rs     — Setup (serde sidecar struct), setup_path
+    plot.rs      — PlotDef/SeriesDef, extract() (scan+decode+f64 coerce+
+                   decimate), GUI-only but pure/testable like the rest of
+                   core (+tests)
+    setup.rs     — Setup (serde sidecar struct incl. `plots`), setup_path
     session.rs   — Session: ALL per-file domain state + operations (+tests)
   tui/
     mod.rs       — ratatui frontend. `pub fn run(Session)`. App = Session +
@@ -94,13 +108,18 @@ src/
                    Save/Cancel, mirrors the TUI's FilterEditor.
     columns.rs   — Columns window: list + editor (name/id/type/field) +
                    Save/Cancel, mirrors the TUI's ColumnEditor.
+    plots.rs     — Plots manager window (list/Show-toggle/Edit/Remove/Add,
+                   variable-length series editor reusing searchable_combo)
+                   + rendering of each shown plot as its own egui_plot::Plot
+                   window. PlotsState::cache holds extracted points per open
+                   plot so they aren't re-decoded every frame.
 ```
 
 ### `Session` (src/core/session.rs) — the shared heart
 
 Public fields (all `pub`): `path, data, entries, start_us, time_format,
 filters, filter_text, filtered, columns, columns_text, marks, id_options,
-type_options, selected`.
+type_options, selected, plots`.
 
 Key methods the GUI should reuse (do NOT reimplement in the GUI):
 - `Session::new(path, data, entries)` — builds id/type option lists, filtered=all.
@@ -194,7 +213,7 @@ Done and committed (`9c8d751`):
   after each commit; GUI window itself still not visually confirmed in this
   sandbox (no attached display) — check on a real macOS session.
 
-### Phase 3 — DONE (this is where you resume: Phase 4)
+### Phase 3 — DONE
 Done and committed (`532a76c`, `6e2895f`, `3289d77`, `afe38b1`):
 - **Settings + Save** (`532a76c`): toolbar "Settings" button opens an
   `egui::Window` with a Time-column radio group bound straight to
@@ -232,22 +251,82 @@ Done and committed (`532a76c`, `6e2895f`, `3289d77`, `afe38b1`):
   does, through the same `Session::save_setup`/`load_setup` and `Setup`
   sidecar format — not yet re-verified end-to-end with a live GUI session
   in this sandbox (no attached display; see the Phase 1 note).
-- `cargo build`/`cargo test` (15/15) verified green after each of the four
-  commits above.
+- `cargo build`/`cargo test` verified green after each of the four commits
+  above (15/15 at the time; more tests were added since, see Phase 4).
 
-### Phases 4–5 — NOT STARTED (summary; full detail in the ~/.claude plan)
-- **Phase 4 — plots (the motivating feature)**: add `core::plot.rs`
-  (`PlotDef { name, series: Vec<SeriesDef> }`, `SeriesDef { sysid, compid,
-  msg_type, field }`, extraction reusing the column `matches` scan → decode →
-  f64 coercion, reject non-numeric, min/max-bucket decimation above ~200k
-  pts/series; unit-test extraction + decimation). Add a `plots` field to
-  `Session` and to `Setup` (`#[serde(default)]` so old sidecars still load).
-  Plots-manager window + series editor (reuse dropdowns). Each open plot is an
-  `egui::Window` with `egui_plot::Plot` (legend, zoom/pan/box-zoom, hover, time
-  x-axis formatted per mode, marks as vertical lines). Multiple plots at once.
-- **Phase 5 — cross-platform + polish**: keyboard-shortcut audit + Help window;
-  README (usage, GUI/TUI modes, Linux build deps: `libxkbcommon`, X11/Wayland,
-  GTK3 for `rfd`); build verification notes; final regression.
+### Phase 4 — DONE
+Done and committed (`2d6387c`):
+- `core/plot.rs`: `PlotDef { name, series: Vec<SeriesDef> }`, `SeriesDef {
+  sysid, compid, msg_type, field }`; `extract(session, series)` scans
+  `session.entries` for the id/type match, decodes, coerces the named field
+  to `f64` via the same "walk the serde_json object, skip non-numeric"
+  approach as `Session::column_value` (enum fields serializing as `{"type":
+  "..."}` are skipped, not coerced), then min/max-bucket decimates above
+  ~200k points so a spike survives even when heavily downsampled. Unit-tested
+  against real parsed HEARTBEAT frames (id filtering + numeric coercion) and
+  both decimation branches (short series untouched, long series shrunk with
+  the global max preserved).
+- `Session` gained `plots: Vec<PlotDef>`; `Setup` gained `#[serde(default)]
+  plots: Vec<PlotDef>` (old sidecars without it still load); `save_setup`/
+  `load_setup` round-trip it like every other field — no new persistence
+  mechanism.
+- `gui/plots.rs`: a Plots manager window (per-plot Show checkbox/Edit/Remove
+  rows, "Add plot") and an editor with a variable number of series rows, each
+  an id/type/field `searchable_combo` trio built from
+  `Session::filter_dropdown_labels`/`column_dropdown_labels` — no new dropdown
+  plumbing needed, same reuse as the filters/columns editors. Each shown plot
+  renders as its own `egui_plot::Plot` window: a `Line` per series, a legend,
+  `VLine`s at every mark's timestamp, and an `x_axis_formatter` matching the
+  current time mode (via `core::time::format_datetime`/`format_offset`).
+  Zoom/pan/box-zoom/hover come for free from `egui_plot::Plot`.
+- **Important perf note if you touch this file**: `PlotsState::cache` holds
+  each open plot's already-extracted-and-decimated points, populated on Show
+  or on Save-while-shown, keyed by plot index (with reindexing on Remove).
+  `render_plot` reads from this cache instead of calling `plot::extract`
+  directly — `Session`'s tlog data never changes after loading, so extraction
+  is genuinely a one-time cost per plot, but `show_open_plots` runs every UI
+  frame (~60/s) for every open plot window, and re-decoding+re-JSON-coercing
+  every matching entry that often would have undermined the whole point of
+  the decimation feature. Don't remove the cache to "simplify" this — it was
+  added specifically because the first draft did exactly that and was
+  measurably wasteful in reasoning about (not benchmarked in this sandbox,
+  but the cost model is unambiguous: full linear scan + `serde_json::to_value`
+  per matching entry, every frame, times however many plots are open).
+
+### Phase 5 — DONE
+Done and committed (`3809459`, `e939c62`):
+- **Keyboard-shortcut audit**: the one real gap found was that no popup
+  window (error modal, label editor, settings, filters, columns, plots
+  manager) could be dismissed from the keyboard. `GuiApp::handle_escape` now
+  closes whichever one is open on Esc, in a fixed precedence (egui doesn't
+  expose real window stacking order, so this is a static list, not "topmost
+  window" in a strict sense) — one press closes at most one window. Known
+  minor rough edge: a `searchable_combo`'s own popup already closes itself on
+  Esc; on that same keystroke, `handle_escape` may also close the popup's
+  parent window (e.g. Filters) if nothing else takes precedence first. Not
+  fixed — cosmetic, not a correctness bug.
+- Toolbar **"Help"** button/window lists every keyboard shortcut and mouse
+  interaction (Space to mark, arrow-key list nav, drag-and-drop, right-click
+  — several of these had no other on-screen discovery path).
+- **README.md**: usage for both frontends, the setup-sidecar round-trip
+  guarantee, the shortcut table (mirrors the Help window), `cargo build
+  --release` timing note, Linux system deps for `eframe`/`rfd`
+  (`libxkbcommon-dev libx11-dev libgtk-3-dev` on Debian/Ubuntu — not verified
+  by actually building on Linux in this sandbox, just standard guidance for
+  this dependency stack), and how to run tests.
+- **Final regression** (this sandbox, macOS host, no attached display):
+  `cargo build` and `cargo build --release` both warning-free; `cargo test`
+  green at **19/19**; `cargo run -- sample.tlog` runs without panicking for
+  several seconds (can't interact with it headlessly); the TUI was
+  re-smoke-tested via tmux after all the GUI-side churn (hex_dump move,
+  Session gaining a `plots` field, etc.) and still renders/scrolls/decodes
+  correctly — nothing on the TUI side regressed.
+- **Not done, and can't be done in this sandbox**: actually clicking through
+  the GUI on a real display (open a file, drag-and-drop, every window,
+  filters/columns/plots editors, mark label popup, right-click menu, plot
+  zoom/pan/hover). Every phase's notes above flag this same gap. Do this on a
+  real macOS/Linux/Windows machine before treating the GUI as verified rather
+  than "compiles and the core logic is unit-tested."
 
 ## egui/eframe 0.35 API notes (verified against vendored source — don't re-derive)
 
@@ -272,7 +351,9 @@ build cycle already:
 ## How to build / test / run
 
 - Build: `cargo build` (first build of the egui stack is slow, ~1.5 min; cached after).
-- Test: `cargo test` — expect **15 passed**. Core tests must not need a display.
+- Test: `cargo test` — expect **19 passed**. Core tests must not need a display.
+- User-facing usage/build docs now live in `README.md` at the repo root — this
+  file is for handoff/implementation state, README is for "how do I run this."
 - Run GUI: `cargo run -- sample.tlog` (or with no arg for the empty state).
   A native window opens — run interactively on macOS; it can't be exercised in a
   headless/tmux context.
