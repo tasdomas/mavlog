@@ -6,6 +6,7 @@ use std::{collections::HashMap, env, fs};
 use anyhow::{bail, Context, Result};
 use core::column::{parse_columns, CustomColumn};
 use core::filter::{match_labels, parse_filters, FilterExpr};
+use core::setup::{setup_path, Setup};
 use core::time::{format_datetime, format_offset, parse_jump, TimeFormat};
 
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, MouseEventKind};
@@ -41,24 +42,6 @@ fn main() -> Result<()> {
 enum Focus {
     List,
     Detail,
-}
-
-/// Persisted per-file state, stored as JSON next to the tlog.
-#[derive(serde::Serialize, serde::Deserialize)]
-struct Setup {
-    time_format: TimeFormat,
-    filter: String,
-    /// Marked messages by entry index, with optional labels.
-    marks: std::collections::BTreeMap<usize, String>,
-    /// Entry index of the selected message.
-    selected: usize,
-    /// Custom column definitions in `parse_columns` text form.
-    #[serde(default)]
-    columns: String,
-}
-
-fn setup_path(log_path: &str) -> String {
-    format!("{log_path}.mavlog.json")
 }
 
 struct Settings {
