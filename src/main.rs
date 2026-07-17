@@ -1,6 +1,6 @@
 mod tlog;
 
-use std::{env, fs};
+use std::{collections::HashMap, env, fs};
 
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, NaiveDateTime, NaiveTime};
@@ -94,12 +94,16 @@ struct App {
     id_options: Vec<(u8, u8)>,
     /// Distinct message-type names present in the file, sorted.
     type_options: Vec<String>,
+    /// Marked messages by entry index; the value is an optional label.
+    marks: HashMap<usize, String>,
 }
 
 #[derive(PartialEq, Clone, Copy)]
 enum PromptKind {
     Jump,
     Filter,
+    /// Label the marked message at this entry index.
+    Label(usize),
 }
 
 /// Footer input line (jump-to-time or filter).
@@ -201,6 +205,7 @@ impl App {
             filter_popup: None,
             id_options,
             type_options,
+            marks: HashMap::new(),
             selected: 0,
             offset: 0,
             view_height: 1,
@@ -282,6 +287,7 @@ impl App {
                     error: None,
                 })
             }
+            KeyCode::Char(' ') => self.toggle_mark(),
             KeyCode::Esc => {
                 if self.focus == Focus::Detail {
                     self.focus = Focus::List;
@@ -330,6 +336,10 @@ impl App {
                         self.filter_text = input.trim().to_string();
                         self.apply_filter();
                     }),
+                    PromptKind::Label(entry_index) => {
+                        self.marks.insert(entry_index, input.trim().to_string());
+                        Ok(())
+                    }
                 };
                 match result {
                     Ok(()) => self.prompt = None,
@@ -349,6 +359,22 @@ impl App {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// Toggle the mark on the selected message. Marking also opens the
+    /// optional label prompt; unmarking discards the label.
+    fn toggle_mark(&mut self) {
+        let Some(&entry_index) = self.filtered.get(self.selected) else {
+            return;
+        };
+        if self.marks.remove(&entry_index).is_none() {
+            self.marks.insert(entry_index, String::new());
+            self.prompt = Some(Prompt {
+                kind: PromptKind::Label(entry_index),
+                input: String::new(),
+                error: None,
+            });
         }
     }
 
@@ -641,6 +667,7 @@ impl App {
                     TimeFormat::OffsetSecs => " Jump to offset (seconds): ",
                 },
                 PromptKind::Filter => " Filter (e.g. 1:1 HEARTBEAT, GPS*, 255 — empty clears): ",
+                PromptKind::Label(_) => " Label for marked message (Enter to save, Esc to skip): ",
             };
             let mut spans = vec![
                 Span::styled(label, bar_style.add_modifier(Modifier::BOLD)),
@@ -677,8 +704,8 @@ impl App {
                 }
             } else {
                 match self.focus {
-                    Focus::List => " ↑/↓ select  PgUp/PgDn  g/G top/bottom  →/Tab details  t jump  f filter  s settings  q quit",
-                    Focus::Detail => " ↑/↓ scroll  PgUp/PgDn  ←/Esc back to list  t jump  f filter  s settings  q quit",
+                    Focus::List => " ↑/↓ select  →/Tab details  Space mark  t jump  f filter  s settings  q quit",
+                    Focus::Detail => " ↑/↓ scroll  ←/Esc list  Space mark  t jump  f filter  s settings  q quit",
                 }
             };
             frame.render_widget(
@@ -950,14 +977,23 @@ impl App {
             .map(|(i, &entry_index)| {
                 let position = self.offset + i;
                 let entry = &self.entries[entry_index];
+                let mark = self.marks.get(&entry_index);
+                let label = match mark {
+                    Some(label) if label.is_empty() => "●".to_string(),
+                    Some(label) => format!("● {label}"),
+                    None => String::new(),
+                };
                 let row = Row::new(vec![
                     format!("{entry_index:>7}"),
                     self.format_list_time(entry.timestamp_us),
                     format!("{:>3}:{:<3}", entry.sysid, entry.compid),
                     entry.name.clone(),
+                    label,
                 ]);
                 if position == self.selected {
                     row.style(selection_style)
+                } else if mark.is_some() {
+                    row.style(Style::new().fg(Color::White).bg(Color::Red))
                 } else {
                     row
                 }
@@ -970,10 +1006,11 @@ impl App {
                 Constraint::Length(time_width),
                 Constraint::Length(7),
                 Constraint::Fill(1),
+                Constraint::Length(14),
             ],
         )
         .header(
-            Row::new(vec!["#", "TIME", "SYS:CMP", "MESSAGE"])
+            Row::new(vec!["#", "TIME", "SYS:CMP", "MESSAGE", "LABEL"])
                 .style(Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
         )
         .block(self.pane_block(Focus::List).title(" Messages "));
@@ -991,10 +1028,18 @@ impl App {
         };
         let entry = &self.entries[entry_index];
         let mut body = format!(
-            "Time: {}  ({})\n\n",
+            "Time: {}  ({})\n",
             format_datetime(entry.timestamp_us),
             format_offset(entry.timestamp_us, self.start_us),
         );
+        if let Some(label) = self.marks.get(&entry_index) {
+            body.push_str("Mark: ●");
+            if !label.is_empty() {
+                body.push_str(&format!(" {label}"));
+            }
+            body.push('\n');
+        }
+        body.push('\n');
         body.push_str(&match tlog::decode(&self.data, entry) {
             Ok(msg) => format!("{msg:#?}"),
             Err(_) => hex_dump(&self.data[entry.payload.clone()]),
