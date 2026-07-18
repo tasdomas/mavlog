@@ -46,7 +46,7 @@ inside them immediately:
 | Ctrl/Cmd+, or `s` | Toggle Settings |
 | F1 or `?` | Toggle the Help window |
 | Ctrl/Cmd+N or `a` | Add a filter/column/plot, in whichever of those windows is open |
-| Tab / Shift+Tab | Move focus between a window's controls |
+| Tab / Shift+Tab | Move focus between controls (stays inside an open popup) |
 | Up / Down | Move the selection |
 | Page Up / Page Down | Move the selection by a page |
 | Home / End | Jump to the first / last message |

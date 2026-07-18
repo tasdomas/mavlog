@@ -378,6 +378,20 @@ code:
   egui's ComboBox default (`CloseOnClick`) closes the popup on any inner
   click — including on the search box, which made the autocomplete
   unusable. Option picks close explicitly via `ui.close()`.
+- **Tab containment is hand-rolled, not `set_modal_layer`** (`ebc1e9d`):
+  egui's Tab traversal is global creation-order with no per-window
+  containment, and its official containment tool
+  (`Memory::set_modal_layer`, what `egui::Modal` uses) also blocks all
+  interaction below the modal layer — background clicks, a second open
+  popup, and open plot windows would go dead. Instead
+  `GuiApp::keep_focus_in_popups` detects (via `read_response` on the
+  focused id at frame start, which serves prev-frame data) that last
+  frame's *Tab* left focus on a `LayerId::background()` widget while a
+  popup is open, and re-grabs into the top-most popup. Gated on
+  `tab_pressed_last_frame` so a deliberate click into a background
+  widget (e.g. the jump box) keeps its focus; cross-popup tabbing stays
+  allowed since popups aren't the background layer. Don't replace this
+  with `set_modal_layer` without accepting those interaction losses.
 
 ## egui/eframe 0.35 API notes (verified against vendored source — don't re-derive)
 
