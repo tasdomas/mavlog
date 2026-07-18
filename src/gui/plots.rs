@@ -5,7 +5,7 @@
 use std::collections::{HashMap, HashSet};
 
 use eframe::egui;
-use egui_plot::{Legend, Line, PlotPoints, VLine};
+use egui_plot::{Legend, Line, LineStyle, PlotPoints, VLine};
 
 use crate::core::plot::{self, PlotDef, SeriesDef};
 use crate::core::session::Session;
@@ -391,6 +391,10 @@ pub fn show_open_plots(ctx: &egui::Context, session: &Session, state: &mut Plots
     }
 }
 
+/// Vertical mark lines use the same red as the list's marked-row background
+/// (`super::MARK_BG`), brightened so a 1px dashed line stays visible.
+const MARK_LINE: egui::Color32 = egui::Color32::from_rgb(220, 70, 70);
+
 fn render_plot(
     ui: &mut egui::Ui,
     session: &Session,
@@ -400,10 +404,13 @@ fn render_plot(
 ) {
     let time_format = session.time_format;
     let start_us = session.start_us;
-    let mark_times: Vec<u64> = session
+    let marks: Vec<(usize, f64, &str)> = session
         .marks
-        .keys()
-        .map(|&entry_index| session.entries[entry_index].timestamp_us)
+        .iter()
+        .map(|(&entry_index, label)| {
+            let ts = session.entries[entry_index].timestamp_us;
+            (entry_index, ts as f64, label.as_str())
+        })
         .collect();
 
     egui_plot::Plot::new(("plot", plot_index))
@@ -417,8 +424,21 @@ fn render_plot(
                 let label = series_label(series);
                 plot_ui.line(Line::new(label, PlotPoints::from(series_points.clone())));
             }
-            for ts in mark_times {
-                plot_ui.vline(VLine::new("mark", ts as f64));
+            for &(entry_index, x, label) in &marks {
+                // A fixed color: the default (transparent) would consume the
+                // next color from the same auto-color cycle the data series
+                // draw from, making marks look like just another series.
+                // An explicit id too: egui_plot derives item ids from names,
+                // and marks sharing a name (all unlabeled ones) would
+                // otherwise share one id and corrupt per-item hover state.
+                let name = if label.is_empty() { "mark" } else { label };
+                plot_ui.vline(
+                    VLine::new(name, x)
+                        .id(egui::Id::new(("mark", entry_index)))
+                        .color(MARK_LINE)
+                        .width(1.5)
+                        .style(LineStyle::dashed_loose()),
+                );
             }
         });
 }
