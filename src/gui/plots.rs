@@ -413,7 +413,7 @@ fn render_plot(
         })
         .collect();
 
-    egui_plot::Plot::new(("plot", plot_index))
+    let response = egui_plot::Plot::new(("plot", plot_index))
         .legend(Legend::default())
         .x_axis_formatter(move |mark, _range| match time_format {
             TimeFormat::DateTime => format_datetime(mark.value.max(0.0) as u64),
@@ -424,16 +424,17 @@ fn render_plot(
                 let label = series_label(series);
                 plot_ui.line(Line::new(label, PlotPoints::from(series_points.clone())));
             }
-            for &(entry_index, x, label) in &marks {
+            for &(entry_index, x, _) in &marks {
                 // A fixed color: the default (transparent) would consume the
                 // next color from the same auto-color cycle the data series
                 // draw from, making marks look like just another series.
-                // An explicit id too: egui_plot derives item ids from names,
-                // and marks sharing a name (all unlabeled ones) would
-                // otherwise share one id and corrupt per-item hover state.
-                let name = if label.is_empty() { "mark" } else { label };
+                // An empty name keeps marks out of the legend (their labels
+                // are painted onto the plot below instead), which is also
+                // why the id must be explicit: egui_plot derives item ids
+                // from names, and identical names mean one shared id,
+                // corrupting per-item hover state.
                 plot_ui.vline(
-                    VLine::new(name, x)
+                    VLine::new("", x)
                         .id(egui::Id::new(("mark", entry_index)))
                         .color(MARK_LINE)
                         .width(1.5)
@@ -441,6 +442,32 @@ fn render_plot(
                 );
             }
         });
+
+    // Mark labels: vertical text rising from the bottom of the plot beside
+    // each mark's line. Painted after the plot because egui_plot's own Text
+    // item can't rotate; the PlotResponse transform maps the mark's time to
+    // a screen x.
+    let frame = *response.transform.frame();
+    let painter = ui.painter().with_clip_rect(frame.intersect(ui.clip_rect()));
+    let font = egui::TextStyle::Small.resolve(ui.style());
+    for &(_, x, label) in &marks {
+        if label.is_empty() {
+            continue;
+        }
+        let line_x = response.transform.position_from_point_x(x);
+        if !frame.x_range().contains(line_x) {
+            continue;
+        }
+        let galley = painter.layout_no_wrap(label.to_string(), font.clone(), MARK_LINE);
+        // TextShape rotates clockwise around `pos` (the galley's unrotated
+        // top-left), so -90° makes the text read bottom-up, its glyph
+        // column just right of the mark line.
+        let pos = egui::pos2(line_x + 3.0, frame.bottom() - 4.0);
+        painter.add(
+            egui::epaint::TextShape::new(pos, galley, MARK_LINE)
+                .with_angle(-std::f32::consts::FRAC_PI_2),
+        );
+    }
 }
 
 fn series_label(series: &SeriesDef) -> String {
