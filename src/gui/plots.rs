@@ -61,6 +61,21 @@ impl PlotsState {
         self.manager_open = false;
     }
 
+    pub fn toggle_manager(&mut self) {
+        self.manager_open = !self.manager_open;
+    }
+
+    /// Whether an "add"/"edit" plot editor is currently open (used by the
+    /// layered Esc handler: cancel the editor before closing the manager).
+    pub fn has_editor(&self) -> bool {
+        self.editor.is_some()
+    }
+
+    pub fn cancel_editor(&mut self) {
+        self.editor = None;
+        self.error = None;
+    }
+
     fn extract(session: &Session, plot_def: &PlotDef) -> Vec<Vec<[f64; 2]>> {
         plot_def.series.iter().map(|s| plot::extract(session, s)).collect()
     }
@@ -114,6 +129,10 @@ fn editor_for(session: &Session, index: Option<usize>) -> PlotEditor {
 pub fn show_manager(ctx: &egui::Context, session: &mut Session, state: &mut PlotsState) {
     if !state.manager_open {
         return;
+    }
+    if ctx.input_mut(|i| i.consume_shortcut(&super::ADD_SHORTCUT)) && state.editor.is_none() {
+        state.editor = Some(editor_for(session, None));
+        state.error = None;
     }
     egui::Window::new("Plots")
         .collapsible(false)
@@ -249,6 +268,12 @@ pub fn show_manager(ctx: &egui::Context, session: &mut Session, state: &mut Plot
                         cancel = true;
                     }
                 });
+            }
+            if state.editor.is_some()
+                && ctx.input(|i| i.key_pressed(egui::Key::Enter))
+                && ctx.memory(|m| m.focused().is_none())
+            {
+                save = true;
             }
             if save {
                 let editor = state.editor.as_ref().unwrap();

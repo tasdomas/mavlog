@@ -16,6 +16,17 @@ use crate::tlog;
 
 const OPEN_SHORTCUT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::O);
 const SAVE_SHORTCUT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::S);
+const JUMP_SHORTCUT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::J);
+const FILTERS_SHORTCUT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::F);
+const COLUMNS_SHORTCUT: KeyboardShortcut =
+    KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::C);
+const PLOTS_SHORTCUT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::P);
+const SETTINGS_SHORTCUT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Comma);
+const HELP_SHORTCUT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::F1);
+/// Consumed by whichever of the Filters/Columns/Plots windows is open and
+/// calls `ctx.input_mut` first each frame — see `GuiApp::ui`'s fixed call
+/// order (filters, then columns, then plots) for the tie-break.
+pub(crate) const ADD_SHORTCUT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::N);
 const MARK_BG: Color32 = Color32::from_rgb(140, 20, 20);
 
 /// A context-menu action on a message row, applied after the table body
@@ -72,6 +83,16 @@ struct GuiApp {
     plots_state: plots::PlotsState,
     /// Whether the Help window is open.
     help_open: bool,
+    /// Set by the jump-focus shortcut; the toolbar requests focus on the
+    /// jump box next time it's drawn, then clears this.
+    focus_jump: bool,
+    /// Whether any widget had keyboard focus at the end of the previous
+    /// frame. `Esc` uses this instead of a live `ctx.memory` query: egui's
+    /// own input processing already blurs a focused widget on `Esc` before
+    /// our code runs each frame, so a live query can never tell "something
+    /// was just blurred by this same keypress" apart from "nothing was ever
+    /// focused" — both read as unfocused by the time we look.
+    focused_last_frame: bool,
 }
 
 impl GuiApp {
@@ -94,6 +115,8 @@ impl GuiApp {
             columns_state: columns::ColumnsState::default(),
             plots_state: plots::PlotsState::default(),
             help_open: false,
+            focus_jump: false,
+            focused_last_frame: false,
         }
     }
 
@@ -249,7 +272,52 @@ impl GuiApp {
         });
     }
 
-    /// Handle list-navigation keys, unless a text field currently has focus.
+    /// Consume the toolbar's modifier shortcuts (Cmd/Ctrl-based; these work
+    /// regardless of focus, like any app-level shortcut), then — only where
+    /// nothing has keyboard focus — their plain-letter TUI-parity
+    /// equivalents. Consuming a modifier shortcut first matters: egui's
+    /// `key_pressed` ignores modifiers entirely, so an un-consumed Cmd+F
+    /// press would also satisfy a later plain `f` check and double-toggle
+    /// the same window shut immediately after opening it.
+    fn handle_toolbar_shortcuts(&mut self, ctx: &egui::Context) {
+        if ctx.input_mut(|i| i.consume_shortcut(&OPEN_SHORTCUT)) {
+            self.pick_and_open();
+        }
+        if ctx.input_mut(|i| i.consume_shortcut(&SAVE_SHORTCUT)) {
+            self.save_setup();
+        }
+        if ctx.input_mut(|i| i.consume_shortcut(&JUMP_SHORTCUT)) {
+            self.focus_jump = true;
+        }
+        if ctx.input_mut(|i| i.consume_shortcut(&FILTERS_SHORTCUT)) {
+            self.filters_open = !self.filters_open;
+        }
+        if ctx.input_mut(|i| i.consume_shortcut(&COLUMNS_SHORTCUT)) {
+            self.columns_open = !self.columns_open;
+        }
+        if ctx.input_mut(|i| i.consume_shortcut(&PLOTS_SHORTCUT)) {
+            self.plots_state.toggle_manager();
+        }
+        if ctx.input_mut(|i| i.consume_shortcut(&SETTINGS_SHORTCUT)) {
+            self.settings_open = !self.settings_open;
+        }
+        if ctx.input_mut(|i| i.consume_shortcut(&HELP_SHORTCUT)) {
+            self.help_open = !self.help_open;
+        }
+
+        if ctx.memory(|m| m.focused().is_some()) {
+            return;
+        }
+        if ctx.input(|i| i.key_pressed(Key::Questionmark)) {
+            self.help_open = !self.help_open;
+        }
+        if ctx.input(|i| i.key_pressed(Key::O)) {
+            self.pick_and_open();
+        }
+    }
+
+    /// Handle list-navigation keys and the session-only plain-letter
+    /// shortcuts, unless a text field currently has focus.
     fn handle_nav_keys(&mut self, ctx: &egui::Context) {
         if self.session.is_none() || ctx.memory(|m| m.focused().is_some()) {
             return;
@@ -281,13 +349,40 @@ impl GuiApp {
         if ctx.input(|i| i.key_pressed(Key::Space)) {
             self.toggle_mark();
         }
+        // Plain-letter, TUI-parity equivalents of the toolbar shortcuts.
+        // Modifier forms are handled (and consumed first) in
+        // handle_toolbar_shortcuts.
+        if ctx.input(|i| i.key_pressed(Key::W)) {
+            self.save_setup();
+        }
+        if ctx.input(|i| i.key_pressed(Key::T)) {
+            self.focus_jump = true;
+        }
+        if ctx.input(|i| i.key_pressed(Key::F)) {
+            self.filters_open = !self.filters_open;
+        }
+        if ctx.input(|i| i.key_pressed(Key::C)) {
+            self.columns_open = !self.columns_open;
+        }
+        if ctx.input(|i| i.key_pressed(Key::P)) {
+            self.plots_state.toggle_manager();
+        }
+        if ctx.input(|i| i.key_pressed(Key::S)) {
+            self.settings_open = !self.settings_open;
+        }
     }
 
     /// Esc closes whichever window is open, in a fixed precedence (most
     /// transient first) since egui doesn't track window stacking order for
-    /// us. One press closes at most one window.
+    /// us. One press closes at most one window: it cancels an open popup
+    /// editor before closing that popup's window.
     fn handle_escape(&mut self, ctx: &egui::Context) {
         if !ctx.input(|i| i.key_pressed(Key::Escape)) {
+            return;
+        }
+        if self.focused_last_frame {
+            // egui already blurred the focused widget for us this frame;
+            // don't also close a window on the same keypress.
             return;
         }
         if self.error.is_some() {
@@ -298,18 +393,29 @@ impl GuiApp {
             self.help_open = false;
         } else if self.settings_open {
             self.settings_open = false;
+        } else if self.filters_open && self.filters_state.has_editor() {
+            self.filters_state.cancel_editor();
         } else if self.filters_open {
             self.filters_open = false;
+        } else if self.columns_open && self.columns_state.has_editor() {
+            self.columns_state.cancel_editor();
         } else if self.columns_open {
             self.columns_open = false;
+        } else if self.plots_state.is_manager_open() && self.plots_state.has_editor() {
+            self.plots_state.cancel_editor();
         } else if self.plots_state.is_manager_open() {
             self.plots_state.close_manager();
         }
     }
 
     fn toolbar(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
         ui.horizontal(|ui| {
-            if ui.button("Open…").clicked() {
+            if ui
+                .button("Open…")
+                .on_hover_text(hint(&ctx, &OPEN_SHORTCUT, "o"))
+                .clicked()
+            {
                 self.pick_and_open();
             }
             ui.separator();
@@ -317,40 +423,70 @@ impl GuiApp {
             if self.session.is_some() {
                 ui.separator();
                 ui.label("Jump to:");
-                let response = ui.add(
-                    egui::TextEdit::singleline(&mut self.jump_input)
-                        .hint_text(match self.session.as_ref().unwrap().time_format {
-                            TimeFormat::DateTime => "2024-07-17 07:06:40",
-                            TimeFormat::OffsetSecs => "T+4.5s",
-                        })
-                        .desired_width(160.0),
-                );
+                let response = ui
+                    .add(
+                        egui::TextEdit::singleline(&mut self.jump_input)
+                            .hint_text(match self.session.as_ref().unwrap().time_format {
+                                TimeFormat::DateTime => "2024-07-17 07:06:40",
+                                TimeFormat::OffsetSecs => "T+4.5s",
+                            })
+                            .desired_width(160.0),
+                    )
+                    .on_hover_text(format!("Focus: {}", hint(&ctx, &JUMP_SHORTCUT, "t")));
+                if self.focus_jump {
+                    response.request_focus();
+                    self.focus_jump = false;
+                }
                 let submitted = response.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
-                if ui.button("Jump").clicked() || submitted {
+                if ui.button("Jump").on_hover_text("Enter").clicked() || submitted {
                     self.jump();
                 }
                 if let Some(err) = &self.jump_error {
                     ui.colored_label(Color32::LIGHT_RED, err);
                 }
                 ui.separator();
-                if ui.button("Filters").clicked() {
+                if ui
+                    .button("Filters")
+                    .on_hover_text(hint(&ctx, &FILTERS_SHORTCUT, "f"))
+                    .clicked()
+                {
                     self.filters_open = true;
                 }
-                if ui.button("Columns").clicked() {
+                if ui
+                    .button("Columns")
+                    .on_hover_text(hint(&ctx, &COLUMNS_SHORTCUT, "c"))
+                    .clicked()
+                {
                     self.columns_open = true;
                 }
-                if ui.button("Plots").clicked() {
+                if ui
+                    .button("Plots")
+                    .on_hover_text(hint(&ctx, &PLOTS_SHORTCUT, "p"))
+                    .clicked()
+                {
                     self.plots_state.open_manager();
                 }
-                if ui.button("Save setup").clicked() {
+                if ui
+                    .button("Save setup")
+                    .on_hover_text(hint(&ctx, &SAVE_SHORTCUT, "w"))
+                    .clicked()
+                {
                     self.save_setup();
                 }
-                if ui.button("Settings").clicked() {
+                if ui
+                    .button("Settings")
+                    .on_hover_text(hint(&ctx, &SETTINGS_SHORTCUT, "s"))
+                    .clicked()
+                {
                     self.settings_open = true;
                 }
             }
             ui.separator();
-            if ui.button("Help").clicked() {
+            if ui
+                .button("Help")
+                .on_hover_text(hint(&ctx, &HELP_SHORTCUT, "?"))
+                .clicked()
+            {
                 self.help_open = true;
             }
         });
@@ -369,20 +505,29 @@ impl GuiApp {
                 ui.label(egui::RichText::new("Keyboard shortcuts").strong());
                 ui.add_space(4.0);
                 for (keys, action) in [
-                    ("Ctrl/Cmd+O", "Open a tlog file"),
-                    ("Ctrl/Cmd+S", "Save the setup sidecar"),
+                    ("Ctrl/Cmd+O or o", "Open a tlog file"),
+                    ("Ctrl/Cmd+S or w", "Save the setup sidecar"),
+                    ("Ctrl/Cmd+J or t", "Focus the jump-to-time box"),
+                    ("Ctrl/Cmd+F or f", "Toggle the Filters window"),
+                    ("Ctrl/Cmd+Shift+C or c", "Toggle the Columns window"),
+                    ("Ctrl/Cmd+P or p", "Toggle the Plots manager"),
+                    ("Ctrl/Cmd+, or s", "Toggle Settings"),
+                    ("F1 or ?", "Toggle this Help window"),
+                    ("Ctrl/Cmd+N", "Add a filter/column/plot (in that window)"),
                     ("Up / Down", "Move the selection"),
                     ("Page Up / Page Down", "Move the selection by a page"),
                     ("Home / End", "Jump to the first / last message"),
                     ("Space", "Toggle a mark on the selected message"),
-                    ("Enter", "Submit the jump-to-time or label box"),
-                    ("Esc", "Close the frontmost window"),
+                    ("Enter", "Submit a box, save an open editor, or dismiss an error"),
+                    ("Esc", "Release focus, then cancel an editor, then close a window"),
                 ] {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new(keys).monospace().strong());
                         ui.label(action);
                     });
                 }
+                ui.add_space(4.0);
+                ui.label("Plain letters only fire when no text field has focus.");
                 ui.add_space(8.0);
                 ui.label(egui::RichText::new("Mouse").strong());
                 ui.add_space(4.0);
@@ -607,6 +752,12 @@ impl GuiApp {
     }
 }
 
+/// Tooltip text for a toolbar button: the platform-formatted modifier
+/// shortcut plus its plain-letter equivalent, e.g. "⌘F or f" on macOS.
+fn hint(ctx: &egui::Context, shortcut: &KeyboardShortcut, plain: &str) -> String {
+    format!("{} or {plain}", ctx.format_shortcut(shortcut))
+}
+
 /// Paint an optional flat background behind a cell, then run its contents.
 fn cell(
     row: &mut egui_extras::TableRow<'_, '_>,
@@ -625,18 +776,15 @@ impl eframe::App for GuiApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
 
-        if ctx.input_mut(|i| i.consume_shortcut(&OPEN_SHORTCUT)) {
-            self.pick_and_open();
-        }
-        if ctx.input_mut(|i| i.consume_shortcut(&SAVE_SHORTCUT)) {
-            self.save_setup();
-        }
-
         let dropped = ctx.input(|i| i.raw.dropped_files.clone());
         if let Some(path) = dropped.iter().find_map(|f| f.path.clone()) {
             self.open_path(&path);
         }
 
+        // Modifier shortcuts must be consumed before the plain-letter checks
+        // in handle_nav_keys so a Cmd-modified press can't also satisfy the
+        // unmodified check for the same key (see handle_toolbar_shortcuts).
+        self.handle_toolbar_shortcuts(&ctx);
         self.handle_nav_keys(&ctx);
         self.handle_escape(&ctx);
 
@@ -687,9 +835,13 @@ impl eframe::App for GuiApp {
                         dismiss = true;
                     }
                 });
-            if dismiss {
+            if dismiss || ctx.input(|i| i.key_pressed(Key::Enter)) {
                 self.error = None;
             }
         }
+
+        // Captured for next frame's handle_escape — see focused_last_frame's
+        // doc comment for why a live query there can't do this job.
+        self.focused_last_frame = ctx.memory(|m| m.focused().is_some());
     }
 }
