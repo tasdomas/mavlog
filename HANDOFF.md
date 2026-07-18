@@ -334,12 +334,16 @@ Done and committed (`3809459`, `e939c62`):
   than "compiles and the core logic is unit-tested."
 
 ### Follow-up: full toolbar/popup keyboard shortcuts — DONE
-Not one of the original 5 phases; requested afterward and done in one commit
-(`0fa0592`, **unsigned**, see the git-state note above). Every toolbar button
-gained a Cmd/Ctrl modifier shortcut (always active) plus a TUI-parity plain
-letter (only when nothing has focus) — see `README.md`'s shortcut table or
-the in-app Help window (F1/`?`) for the full list, don't re-derive it here.
-Two things worth knowing if you touch this code:
+Not one of the original 5 phases; requested afterward. Landed across
+`0fa0592` (toolbar + popup shortcuts), `3d95968` (searchable-dropdown
+CloseOnClickOutside fix), and `b427749` (popups grab focus on open, plain
+`a` adds, letter gating switched to text-box-only) — all **unsigned**, see
+the git-state note above. Every toolbar button has a Cmd/Ctrl modifier
+shortcut (always active) plus a TUI-parity plain letter; popups grab focus
+when they open so Tab works inside them, `a`/⌘N adds in the open popup —
+see `README.md`'s shortcut table or the in-app Help window (F1/`?`) for the
+full list, don't re-derive it here. Things worth knowing if you touch this
+code:
 - **Consume modifier shortcuts before checking plain letters, in that
   order, every frame.** `GuiApp::handle_toolbar_shortcuts` does exactly
   this. `egui::InputState::key_pressed` ignores modifiers entirely — an
@@ -348,17 +352,32 @@ Two things worth knowing if you touch this code:
   removes the matched event from the input queue, so as long as it runs
   first, the later `key_pressed` check for the bare key correctly sees
   nothing.
+- **Three different focus gates, on purpose** (`b427749`):
+  plain-letter shortcuts are gated on *text-box* focus only, detected via
+  `text_input_focused()` — the focused id has `TextEdit::load_state` state
+  iff it's a text box. A focused *button* must not disable letters, because
+  popups deliberately focus their Add button on open (that's what makes Tab
+  work) and the `a` shortcut's whole point is to press that button. List
+  nav (arrows/Space/etc.) stays gated on *any* focus, since egui itself
+  uses arrows to move widget focus and Space to press the focused button.
+  Don't collapse these gates into one.
 - **`handle_escape`'s layered behavior (blur → cancel editor → close
-  window) needs `GuiApp::focused_last_frame`, not a live `ctx.memory`
+  window) needs `GuiApp::text_focused_last_frame`, not a live `ctx.memory`
   query.** egui's `Memory` already blurs a focused widget on Esc as part
   of its own input processing, *before* `App::ui` (and therefore any of
   our code) runs each frame. So by the time we'd check `ctx.memory(|m|
   m.focused())`, "something was just blurred by this same Esc" and
   "nothing was ever focused" are both `None` — indistinguishable live.
-  `focused_last_frame` is captured at the very end of the *previous*
-  frame's `ui()` call specifically to break that tie. If you add another
-  Esc-sensitive window, gate it the same way `handle_escape` already
-  does, and don't try to "simplify" this back to a live query.
+  The flag is captured at the very end of the *previous* frame's `ui()`
+  call specifically to break that tie (and only counts text boxes — a
+  button holding popup-grabbed focus shouldn't cost an extra Esc press).
+  If you add another Esc-sensitive window, gate it the same way
+  `handle_escape` already does, and don't try to "simplify" this back to
+  a live query.
+- **The searchable dropdown must keep `CloseOnClickOutside`** (`3d95968`):
+  egui's ComboBox default (`CloseOnClick`) closes the popup on any inner
+  click — including on the search box, which made the autocomplete
+  unusable. Option picks close explicitly via `ui.close()`.
 
 ## egui/eframe 0.35 API notes (verified against vendored source — don't re-derive)
 

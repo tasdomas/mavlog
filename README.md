@@ -31,8 +31,9 @@ other.
 ### GUI keyboard shortcuts
 
 Every toolbar button has both a Cmd/Ctrl modifier shortcut (always active)
-and, for TUI parity, a plain letter that only fires when no text field has
-focus:
+and, for TUI parity, a plain letter that only fires while no text box has
+focus. Popups grab keyboard focus when they open, so Tab navigation starts
+inside them immediately:
 
 | Keys | Action |
 | --- | --- |
@@ -44,13 +45,14 @@ focus:
 | Ctrl/Cmd+P or `p` | Toggle the Plots manager |
 | Ctrl/Cmd+, or `s` | Toggle Settings |
 | F1 or `?` | Toggle the Help window |
-| Ctrl/Cmd+N | Add a filter/column/plot, in whichever of those windows is open |
+| Ctrl/Cmd+N or `a` | Add a filter/column/plot, in whichever of those windows is open |
+| Tab / Shift+Tab | Move focus between a window's controls |
 | Up / Down | Move the selection |
 | Page Up / Page Down | Move the selection by a page |
 | Home / End | Jump to the first / last message |
 | Space | Toggle a mark on the selected message |
 | Enter | Submit a box, save an open filter/column/plot editor, or dismiss an error |
-| Esc | Release focus, then cancel an open editor, then close a window |
+| Esc | Release a text box's focus, then cancel an open editor, then close a window |
 
 Hovering any toolbar button shows its shortcut. Click a row to select it;
 right-click for a mark context menu; drag a `.tlog` file onto the window to
