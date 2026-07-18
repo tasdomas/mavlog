@@ -101,6 +101,10 @@ struct GuiApp {
     settings_focus: bool,
     /// Focus the label window's text box when it next opens.
     label_focus: bool,
+    /// Whether Tab was pressed last frame; `keep_focus_in_popups` only
+    /// reacts to focus that *Tab* moved, never focus the user clicked
+    /// somewhere on purpose.
+    tab_pressed_last_frame: bool,
 }
 
 /// Whether the currently focused widget (if any) is a text box. Used to gate
@@ -145,6 +149,7 @@ impl GuiApp {
             text_focused_last_frame: false,
             settings_focus: false,
             label_focus: false,
+            tab_pressed_last_frame: false,
         }
     }
 
@@ -480,6 +485,40 @@ impl GuiApp {
             self.plots_state.cancel_editor();
         } else if self.plots_state.is_manager_open() {
             self.plots_state.close_manager();
+        }
+    }
+
+    /// Keep Tab traversal inside an open popup. egui walks focus through
+    /// every focusable widget in creation order across the whole UI, so
+    /// tabbing past a popup's last button lands on the main window's
+    /// toolbar (and then hundreds of table cells). If last frame's Tab
+    /// moved focus onto a background-layer widget while a popup is open,
+    /// pull it back to the top-most popup's entry button. Only Tab-moved
+    /// focus is corrected — a deliberate click on a background widget
+    /// (e.g. into the jump box) must keep the focus it asked for. Popups
+    /// and plot windows live in non-background layers, so tabbing between
+    /// two open popups stays allowed.
+    fn keep_focus_in_popups(&mut self, ctx: &egui::Context) {
+        if !self.tab_pressed_last_frame {
+            return;
+        }
+        let escaped = ctx
+            .memory(|m| m.focused())
+            .and_then(|id| ctx.read_response(id))
+            .is_some_and(|r| r.layer_id == egui::LayerId::background());
+        if !escaped {
+            return;
+        }
+        if self.label_prompt.is_some() {
+            self.label_focus = true;
+        } else if self.plots_state.is_manager_open() {
+            self.plots_state.grab_focus();
+        } else if self.columns_open {
+            self.columns_state.grab_focus();
+        } else if self.filters_open {
+            self.filters_state.grab_focus();
+        } else if self.settings_open {
+            self.settings_focus = true;
         }
     }
 
@@ -868,6 +907,7 @@ impl eframe::App for GuiApp {
         self.handle_toolbar_shortcuts(&ctx);
         self.handle_nav_keys(&ctx);
         self.handle_escape(&ctx);
+        self.keep_focus_in_popups(&ctx);
 
         egui::Panel::top("toolbar").show(ui, |ui| self.toolbar(ui));
 
@@ -921,9 +961,10 @@ impl eframe::App for GuiApp {
             }
         }
 
-        // Captured for next frame's handle_escape — see
-        // text_focused_last_frame's doc comment for why a live query there
-        // can't do this job.
+        // Captured for next frame's handle_escape / keep_focus_in_popups —
+        // see text_focused_last_frame's doc comment for why a live query
+        // there can't do this job.
         self.text_focused_last_frame = text_input_focused(&ctx);
+        self.tab_pressed_last_frame = ctx.input(|i| i.key_pressed(Key::Tab));
     }
 }

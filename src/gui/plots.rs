@@ -72,6 +72,11 @@ impl PlotsState {
         }
     }
 
+    /// Ask the manager window to grab keyboard focus when it is next shown.
+    pub fn grab_focus(&mut self) {
+        self.focus_on_open = true;
+    }
+
     /// Whether an "add"/"edit" plot editor is currently open (used by the
     /// layered Esc handler: cancel the editor before closing the manager).
     pub fn has_editor(&self) -> bool {
