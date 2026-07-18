@@ -696,6 +696,11 @@ impl GuiApp {
             return;
         };
 
+        // Rows are click-to-select; selectable label text would fight that
+        // with an I-beam cursor and drag-selection. Copyable text lives in
+        // the detail pane.
+        ui.style_mut().interaction.selectable_labels = false;
+
         let time_width = match session.time_format {
             TimeFormat::DateTime => 170.0,
             TimeFormat::OffsetSecs => 100.0,
