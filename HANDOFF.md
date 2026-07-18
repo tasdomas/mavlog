@@ -41,7 +41,12 @@ content, plus the phase-by-phase TODO). This file is the authoritative state.
 - Baseline: `master` = the original working TUI (commit `f65b883`).
 - Working branch: **`feat/gui-mode`** (all new work here). Working tree clean.
 - Commits so far (newest first):
-  - `e939c62 docs: add README (Phase 5, part 2)`  ← **HEAD**
+  - `0fa0592 feat(gui): keyboard shortcuts for every toolbar button and popup editor`  ← **HEAD**
+    (this commit is **unsigned** — `--no-gpg-sign`, at the user's explicit
+    request, because the local GPG signing key had expired and this sandbox
+    has no interactive terminal for a pinentry prompt; every other commit on
+    this branch is normally signed)
+  - `e939c62 docs: add README (Phase 5, part 2)`
   - `3809459 feat(gui): Esc-to-close audit and Help window (Phase 5, part 1)`
   - `2d6387c feat: plots — data model, extraction and GUI (Phase 4)`
   - `9f36ad3 docs: mark Phase 3 done in handoff notes`
@@ -327,6 +332,33 @@ Done and committed (`3809459`, `e939c62`):
   zoom/pan/hover). Every phase's notes above flag this same gap. Do this on a
   real macOS/Linux/Windows machine before treating the GUI as verified rather
   than "compiles and the core logic is unit-tested."
+
+### Follow-up: full toolbar/popup keyboard shortcuts — DONE
+Not one of the original 5 phases; requested afterward and done in one commit
+(`0fa0592`, **unsigned**, see the git-state note above). Every toolbar button
+gained a Cmd/Ctrl modifier shortcut (always active) plus a TUI-parity plain
+letter (only when nothing has focus) — see `README.md`'s shortcut table or
+the in-app Help window (F1/`?`) for the full list, don't re-derive it here.
+Two things worth knowing if you touch this code:
+- **Consume modifier shortcuts before checking plain letters, in that
+  order, every frame.** `GuiApp::handle_toolbar_shortcuts` does exactly
+  this. `egui::InputState::key_pressed` ignores modifiers entirely — an
+  un-consumed Cmd+F would also satisfy a plain `f` check for the same key
+  and double-toggle whatever it opened right back shut. `consume_shortcut`
+  removes the matched event from the input queue, so as long as it runs
+  first, the later `key_pressed` check for the bare key correctly sees
+  nothing.
+- **`handle_escape`'s layered behavior (blur → cancel editor → close
+  window) needs `GuiApp::focused_last_frame`, not a live `ctx.memory`
+  query.** egui's `Memory` already blurs a focused widget on Esc as part
+  of its own input processing, *before* `App::ui` (and therefore any of
+  our code) runs each frame. So by the time we'd check `ctx.memory(|m|
+  m.focused())`, "something was just blurred by this same Esc" and
+  "nothing was ever focused" are both `None` — indistinguishable live.
+  `focused_last_frame` is captured at the very end of the *previous*
+  frame's `ui()` call specifically to break that tie. If you add another
+  Esc-sensitive window, gate it the same way `handle_escape` already
+  does, and don't try to "simplify" this back to a live query.
 
 ## egui/eframe 0.35 API notes (verified against vendored source — don't re-derive)
 

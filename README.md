@@ -30,20 +30,32 @@ other.
 
 ### GUI keyboard shortcuts
 
+Every toolbar button has both a Cmd/Ctrl modifier shortcut (always active)
+and, for TUI parity, a plain letter that only fires when no text field has
+focus:
+
 | Keys | Action |
 | --- | --- |
-| Ctrl/Cmd+O | Open a tlog file |
-| Ctrl/Cmd+S | Save the setup sidecar |
+| Ctrl/Cmd+O or `o` | Open a tlog file |
+| Ctrl/Cmd+S or `w` | Save the setup sidecar |
+| Ctrl/Cmd+J or `t` | Focus the jump-to-time box |
+| Ctrl/Cmd+F or `f` | Toggle the Filters window |
+| Ctrl/Cmd+Shift+C or `c` | Toggle the Columns window |
+| Ctrl/Cmd+P or `p` | Toggle the Plots manager |
+| Ctrl/Cmd+, or `s` | Toggle Settings |
+| F1 or `?` | Toggle the Help window |
+| Ctrl/Cmd+N | Add a filter/column/plot, in whichever of those windows is open |
 | Up / Down | Move the selection |
 | Page Up / Page Down | Move the selection by a page |
 | Home / End | Jump to the first / last message |
 | Space | Toggle a mark on the selected message |
-| Enter | Submit the jump-to-time or label box |
-| Esc | Close the frontmost window |
+| Enter | Submit a box, save an open filter/column/plot editor, or dismiss an error |
+| Esc | Release focus, then cancel an open editor, then close a window |
 
-Click a row to select it; right-click for a mark context menu; drag a
-`.tlog` file onto the window to open it. The in-app Help window (toolbar)
-lists the same shortcuts.
+Hovering any toolbar button shows its shortcut. Click a row to select it;
+right-click for a mark context menu; drag a `.tlog` file onto the window to
+open it. The in-app Help window (toolbar, or F1/`?`) lists the same
+shortcuts.
 
 ## Building
 
