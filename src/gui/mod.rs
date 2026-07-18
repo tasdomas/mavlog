@@ -23,10 +23,11 @@ const COLUMNS_SHORTCUT: KeyboardShortcut =
 const PLOTS_SHORTCUT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::P);
 const SETTINGS_SHORTCUT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Comma);
 const HELP_SHORTCUT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::F1);
-/// Consumed by whichever of the Filters/Columns/Plots windows is open and
-/// calls `ctx.input_mut` first each frame — see `GuiApp::ui`'s fixed call
-/// order (filters, then columns, then plots) for the tie-break.
-pub(crate) const ADD_SHORTCUT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::N);
+/// The modifier half of `add_requested` (the popups also accept a plain
+/// `a`); consumed by whichever of the Filters/Columns/Plots windows is open
+/// and checks first each frame — see `GuiApp::ui`'s fixed call order
+/// (filters, then columns, then plots) for the tie-break.
+const ADD_SHORTCUT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::N);
 const MARK_BG: Color32 = Color32::from_rgb(140, 20, 20);
 
 /// A context-menu action on a message row, applied after the table body
@@ -86,13 +87,38 @@ struct GuiApp {
     /// Set by the jump-focus shortcut; the toolbar requests focus on the
     /// jump box next time it's drawn, then clears this.
     focus_jump: bool,
-    /// Whether any widget had keyboard focus at the end of the previous
+    /// Whether a *text box* had keyboard focus at the end of the previous
     /// frame. `Esc` uses this instead of a live `ctx.memory` query: egui's
     /// own input processing already blurs a focused widget on `Esc` before
     /// our code runs each frame, so a live query can never tell "something
     /// was just blurred by this same keypress" apart from "nothing was ever
-    /// focused" — both read as unfocused by the time we look.
-    focused_last_frame: bool,
+    /// focused" — both read as unfocused by the time we look. Only text
+    /// boxes count: for them Esc-to-unfocus is a meaningful step the user
+    /// took on purpose, while a focused *button* (e.g. the focus a popup
+    /// grabs when it opens) shouldn't cost an extra Esc press to get past.
+    text_focused_last_frame: bool,
+    /// Focus the Settings window's first control when it next opens.
+    settings_focus: bool,
+    /// Focus the label window's text box when it next opens.
+    label_focus: bool,
+}
+
+/// Whether the currently focused widget (if any) is a text box. Used to gate
+/// the plain-letter shortcuts: they must not fire while the user is typing,
+/// but focus on a button (e.g. after a popup grabs focus on open, precisely
+/// so Tab works inside it) should not disable them.
+fn text_input_focused(ctx: &egui::Context) -> bool {
+    ctx.memory(|m| m.focused())
+        .is_some_and(|id| egui::TextEdit::load_state(ctx, id).is_some())
+}
+
+/// Did the user ask to add an item — Ctrl/Cmd+N, or a plain `a` when not
+/// typing? Both consume the keypress, so the first open popup that checks
+/// each frame wins (the fixed call order in `GuiApp::ui` is the tie-break).
+fn add_requested(ctx: &egui::Context) -> bool {
+    ctx.input_mut(|i| i.consume_shortcut(&ADD_SHORTCUT))
+        || (!text_input_focused(ctx)
+            && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::A)))
 }
 
 impl GuiApp {
@@ -116,7 +142,47 @@ impl GuiApp {
             plots_state: plots::PlotsState::default(),
             help_open: false,
             focus_jump: false,
-            focused_last_frame: false,
+            text_focused_last_frame: false,
+            settings_focus: false,
+            label_focus: false,
+        }
+    }
+
+    /// Open (or toggle) a popup, letting it grab keyboard focus when it
+    /// opens so Tab navigation starts inside it.
+    fn open_filters(&mut self) {
+        self.filters_open = true;
+        self.filters_state.grab_focus();
+    }
+
+    fn toggle_filters(&mut self) {
+        self.filters_open = !self.filters_open;
+        if self.filters_open {
+            self.filters_state.grab_focus();
+        }
+    }
+
+    fn open_columns(&mut self) {
+        self.columns_open = true;
+        self.columns_state.grab_focus();
+    }
+
+    fn toggle_columns(&mut self) {
+        self.columns_open = !self.columns_open;
+        if self.columns_open {
+            self.columns_state.grab_focus();
+        }
+    }
+
+    fn open_settings(&mut self) {
+        self.settings_open = true;
+        self.settings_focus = true;
+    }
+
+    fn toggle_settings(&mut self) {
+        self.settings_open = !self.settings_open;
+        if self.settings_open {
+            self.settings_focus = true;
         }
     }
 
@@ -220,6 +286,7 @@ impl GuiApp {
             .and_then(|s| s.marks.get(&entry_index).cloned())
             .unwrap_or_default();
         self.label_prompt = Some(entry_index);
+        self.label_focus = true;
     }
 
     fn label_window(&mut self, ctx: &egui::Context) {
@@ -237,6 +304,10 @@ impl GuiApp {
             .resizable(false)
             .show(ctx, |ui| {
                 let response = ui.text_edit_singleline(&mut self.label_input);
+                if self.label_focus {
+                    response.request_focus();
+                    self.label_focus = false;
+                }
                 let submitted =
                     response.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
                 ui.horizontal(|ui| {
@@ -290,22 +361,24 @@ impl GuiApp {
             self.focus_jump = true;
         }
         if ctx.input_mut(|i| i.consume_shortcut(&FILTERS_SHORTCUT)) {
-            self.filters_open = !self.filters_open;
+            self.toggle_filters();
         }
         if ctx.input_mut(|i| i.consume_shortcut(&COLUMNS_SHORTCUT)) {
-            self.columns_open = !self.columns_open;
+            self.toggle_columns();
         }
         if ctx.input_mut(|i| i.consume_shortcut(&PLOTS_SHORTCUT)) {
             self.plots_state.toggle_manager();
         }
         if ctx.input_mut(|i| i.consume_shortcut(&SETTINGS_SHORTCUT)) {
-            self.settings_open = !self.settings_open;
+            self.toggle_settings();
         }
         if ctx.input_mut(|i| i.consume_shortcut(&HELP_SHORTCUT)) {
             self.help_open = !self.help_open;
         }
 
-        if ctx.memory(|m| m.focused().is_some()) {
+        // Plain letters are suppressed only while typing in a text box —
+        // focus on a button (a just-opened popup grabs one) keeps them live.
+        if text_input_focused(ctx) {
             return;
         }
         if ctx.input(|i| i.key_pressed(Key::Questionmark)) {
@@ -314,10 +387,33 @@ impl GuiApp {
         if ctx.input(|i| i.key_pressed(Key::O)) {
             self.pick_and_open();
         }
+        if self.session.is_none() {
+            return;
+        }
+        if ctx.input(|i| i.key_pressed(Key::W)) {
+            self.save_setup();
+        }
+        if ctx.input(|i| i.key_pressed(Key::T)) {
+            self.focus_jump = true;
+        }
+        if ctx.input(|i| i.key_pressed(Key::F)) {
+            self.toggle_filters();
+        }
+        if ctx.input(|i| i.key_pressed(Key::C)) {
+            self.toggle_columns();
+        }
+        if ctx.input(|i| i.key_pressed(Key::P)) {
+            self.plots_state.toggle_manager();
+        }
+        if ctx.input(|i| i.key_pressed(Key::S)) {
+            self.toggle_settings();
+        }
     }
 
-    /// Handle list-navigation keys and the session-only plain-letter
-    /// shortcuts, unless a text field currently has focus.
+    /// Handle list-navigation keys, unless *any* widget has focus — unlike
+    /// the plain-letter shortcuts, these stay gated on button focus too,
+    /// because egui itself uses arrows/Space to navigate and activate
+    /// focused widgets and both firing at once would be chaos.
     fn handle_nav_keys(&mut self, ctx: &egui::Context) {
         if self.session.is_none() || ctx.memory(|m| m.focused().is_some()) {
             return;
@@ -349,27 +445,6 @@ impl GuiApp {
         if ctx.input(|i| i.key_pressed(Key::Space)) {
             self.toggle_mark();
         }
-        // Plain-letter, TUI-parity equivalents of the toolbar shortcuts.
-        // Modifier forms are handled (and consumed first) in
-        // handle_toolbar_shortcuts.
-        if ctx.input(|i| i.key_pressed(Key::W)) {
-            self.save_setup();
-        }
-        if ctx.input(|i| i.key_pressed(Key::T)) {
-            self.focus_jump = true;
-        }
-        if ctx.input(|i| i.key_pressed(Key::F)) {
-            self.filters_open = !self.filters_open;
-        }
-        if ctx.input(|i| i.key_pressed(Key::C)) {
-            self.columns_open = !self.columns_open;
-        }
-        if ctx.input(|i| i.key_pressed(Key::P)) {
-            self.plots_state.toggle_manager();
-        }
-        if ctx.input(|i| i.key_pressed(Key::S)) {
-            self.settings_open = !self.settings_open;
-        }
     }
 
     /// Esc closes whichever window is open, in a fixed precedence (most
@@ -380,8 +455,8 @@ impl GuiApp {
         if !ctx.input(|i| i.key_pressed(Key::Escape)) {
             return;
         }
-        if self.focused_last_frame {
-            // egui already blurred the focused widget for us this frame;
+        if self.text_focused_last_frame {
+            // egui already blurred the focused text box for us this frame;
             // don't also close a window on the same keypress.
             return;
         }
@@ -450,14 +525,14 @@ impl GuiApp {
                     .on_hover_text(hint(&ctx, &FILTERS_SHORTCUT, "f"))
                     .clicked()
                 {
-                    self.filters_open = true;
+                    self.open_filters();
                 }
                 if ui
                     .button("Columns")
                     .on_hover_text(hint(&ctx, &COLUMNS_SHORTCUT, "c"))
                     .clicked()
                 {
-                    self.columns_open = true;
+                    self.open_columns();
                 }
                 if ui
                     .button("Plots")
@@ -478,7 +553,7 @@ impl GuiApp {
                     .on_hover_text(hint(&ctx, &SETTINGS_SHORTCUT, "s"))
                     .clicked()
                 {
-                    self.settings_open = true;
+                    self.open_settings();
                 }
             }
             ui.separator();
@@ -513,7 +588,8 @@ impl GuiApp {
                     ("Ctrl/Cmd+P or p", "Toggle the Plots manager"),
                     ("Ctrl/Cmd+, or s", "Toggle Settings"),
                     ("F1 or ?", "Toggle this Help window"),
-                    ("Ctrl/Cmd+N", "Add a filter/column/plot (in that window)"),
+                    ("Ctrl/Cmd+N or a", "Add a filter/column/plot (in that window)"),
+                    ("Tab / Shift+Tab", "Move focus between a window's controls"),
                     ("Up / Down", "Move the selection"),
                     ("Page Up / Page Down", "Move the selection by a page"),
                     ("Home / End", "Jump to the first / last message"),
@@ -527,7 +603,7 @@ impl GuiApp {
                     });
                 }
                 ui.add_space(4.0);
-                ui.label("Plain letters only fire when no text field has focus.");
+                ui.label("Plain letters only fire while no text box has focus.");
                 ui.add_space(8.0);
                 ui.label(egui::RichText::new("Mouse").strong());
                 ui.add_space(4.0);
@@ -560,7 +636,12 @@ impl GuiApp {
             .resizable(false)
             .show(ctx, |ui| {
                 ui.label("Time column:");
-                ui.radio_value(&mut session.time_format, TimeFormat::DateTime, "Date-time");
+                let first =
+                    ui.radio_value(&mut session.time_format, TimeFormat::DateTime, "Date-time");
+                if self.settings_focus {
+                    first.request_focus();
+                    self.settings_focus = false;
+                }
                 ui.radio_value(&mut session.time_format, TimeFormat::OffsetSecs, "Offset (s)");
             });
         self.settings_open = open;
@@ -840,8 +921,9 @@ impl eframe::App for GuiApp {
             }
         }
 
-        // Captured for next frame's handle_escape — see focused_last_frame's
-        // doc comment for why a live query there can't do this job.
-        self.focused_last_frame = ctx.memory(|m| m.focused().is_some());
+        // Captured for next frame's handle_escape — see
+        // text_focused_last_frame's doc comment for why a live query there
+        // can't do this job.
+        self.text_focused_last_frame = text_input_focused(&ctx);
     }
 }

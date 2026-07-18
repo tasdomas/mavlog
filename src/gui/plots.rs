@@ -35,6 +35,9 @@ struct PlotEditor {
 #[derive(Default)]
 pub struct PlotsState {
     manager_open: bool,
+    /// Focus the manager's first button on the next frame, so keyboard
+    /// (Tab/Enter) navigation starts inside a freshly opened window.
+    focus_on_open: bool,
     editor: Option<PlotEditor>,
     error: Option<String>,
     /// Indices into `Session::plots` currently shown as plot windows.
@@ -50,6 +53,7 @@ pub struct PlotsState {
 impl PlotsState {
     pub fn open_manager(&mut self) {
         self.manager_open = true;
+        self.focus_on_open = true;
     }
 
     /// Whether the manager window is open (used by the Esc-to-close audit).
@@ -63,6 +67,9 @@ impl PlotsState {
 
     pub fn toggle_manager(&mut self) {
         self.manager_open = !self.manager_open;
+        if self.manager_open {
+            self.focus_on_open = true;
+        }
     }
 
     /// Whether an "add"/"edit" plot editor is currently open (used by the
@@ -130,7 +137,7 @@ pub fn show_manager(ctx: &egui::Context, session: &mut Session, state: &mut Plot
     if !state.manager_open {
         return;
     }
-    if ctx.input_mut(|i| i.consume_shortcut(&super::ADD_SHORTCUT)) && state.editor.is_none() {
+    if state.editor.is_none() && super::add_requested(ctx) {
         state.editor = Some(editor_for(session, None));
         state.error = None;
     }
@@ -186,11 +193,25 @@ pub fn show_manager(ctx: &egui::Context, session: &mut Session, state: &mut Plot
 
             ui.separator();
             ui.horizontal(|ui| {
-                if state.editor.is_none() && ui.button("Add plot").clicked() {
-                    state.editor = Some(editor_for(session, None));
-                    state.error = None;
+                if state.editor.is_none() {
+                    let add = ui
+                        .button("Add plot")
+                        .on_hover_text(super::hint(ctx, &super::ADD_SHORTCUT, "a"));
+                    if state.focus_on_open {
+                        add.request_focus();
+                        state.focus_on_open = false;
+                    }
+                    if add.clicked() {
+                        state.editor = Some(editor_for(session, None));
+                        state.error = None;
+                    }
                 }
-                if ui.button("Close").clicked() {
+                let close = ui.button("Close").on_hover_text("Esc");
+                if state.focus_on_open {
+                    close.request_focus();
+                    state.focus_on_open = false;
+                }
+                if close.clicked() {
                     state.manager_open = false;
                 }
             });
@@ -261,10 +282,10 @@ pub fn show_manager(ctx: &egui::Context, session: &mut Session, state: &mut Plot
                     ui.colored_label(egui::Color32::LIGHT_RED, err);
                 }
                 ui.horizontal(|ui| {
-                    if ui.button("Save").clicked() {
+                    if ui.button("Save").on_hover_text("Enter").clicked() {
                         save = true;
                     }
-                    if ui.button("Cancel").clicked() {
+                    if ui.button("Cancel").on_hover_text("Esc").clicked() {
                         cancel = true;
                     }
                 });

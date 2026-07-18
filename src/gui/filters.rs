@@ -24,6 +24,9 @@ pub struct FilterEditor {
 #[derive(Default)]
 pub struct FiltersState {
     editor: Option<FilterEditor>,
+    /// Focus the window's first button on the next frame, so keyboard
+    /// (Tab/Enter) navigation starts inside a freshly opened window.
+    focus_on_open: bool,
 }
 
 impl FiltersState {
@@ -36,11 +39,16 @@ impl FiltersState {
     pub fn cancel_editor(&mut self) {
         self.editor = None;
     }
+
+    /// Ask the window to grab keyboard focus when it is next shown.
+    pub fn grab_focus(&mut self) {
+        self.focus_on_open = true;
+    }
 }
 
 /// Show the Filters window. `open` is cleared when the user clicks Close.
 pub fn show(ctx: &egui::Context, open: &mut bool, session: &mut Session, state: &mut FiltersState) {
-    if ctx.input_mut(|i| i.consume_shortcut(&super::ADD_SHORTCUT)) && state.editor.is_none() {
+    if state.editor.is_none() && super::add_requested(ctx) {
         state.editor = Some(editor_for(session, None));
     }
 
@@ -83,10 +91,24 @@ pub fn show(ctx: &egui::Context, open: &mut bool, session: &mut Session, state: 
 
             ui.separator();
             ui.horizontal(|ui| {
-                if state.editor.is_none() && ui.button("Add filter").clicked() {
-                    state.editor = Some(editor_for(session, None));
+                if state.editor.is_none() {
+                    let add = ui
+                        .button("Add filter")
+                        .on_hover_text(super::hint(ctx, &super::ADD_SHORTCUT, "a"));
+                    if state.focus_on_open {
+                        add.request_focus();
+                        state.focus_on_open = false;
+                    }
+                    if add.clicked() {
+                        state.editor = Some(editor_for(session, None));
+                    }
                 }
-                if ui.button("Close").clicked() {
+                let close = ui.button("Close").on_hover_text("Esc");
+                if state.focus_on_open {
+                    close.request_focus();
+                    state.focus_on_open = false;
+                }
+                if close.clicked() {
                     *open = false;
                 }
             });
@@ -122,10 +144,10 @@ pub fn show(ctx: &egui::Context, open: &mut bool, session: &mut Session, state: 
                     }
                 });
                 ui.horizontal(|ui| {
-                    if ui.button("Save").clicked() {
+                    if ui.button("Save").on_hover_text("Enter").clicked() {
                         save = true;
                     }
-                    if ui.button("Cancel").clicked() {
+                    if ui.button("Cancel").on_hover_text("Esc").clicked() {
                         cancel = true;
                     }
                 });
