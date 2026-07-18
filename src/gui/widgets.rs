@@ -18,6 +18,10 @@ pub fn searchable_combo(
     let mut picked = None;
     egui::ComboBox::from_id_salt(id_salt)
         .selected_text(selected_label)
+        // The default CloseOnClick closes the popup on *any* click inside
+        // it — including on the search box. Keep it open on inner clicks
+        // and close explicitly (`ui.close()`) when an option is picked.
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
         .show_ui(ui, |ui| {
             ui.add(egui::TextEdit::singleline(query).hint_text("Search…"));
             ui.separator();
@@ -25,6 +29,7 @@ pub fn searchable_combo(
                 for i in match_labels(options, query) {
                     if ui.selectable_label(false, &options[i]).clicked() {
                         picked = Some(i);
+                        ui.close();
                     }
                 }
             });
