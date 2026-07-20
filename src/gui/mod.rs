@@ -649,6 +649,8 @@ impl GuiApp {
                 for (action, desc) in [
                     ("Click a row", "Select that message"),
                     ("Right-click a row", "Add/edit/remove its mark"),
+                    ("Double-click a mark (side pane)", "Jump the list to that message"),
+                    ("Right-click a mark (side pane)", "Edit label / remove mark"),
                     ("Drag a file onto the window", "Open it"),
                 ] {
                     ui.horizontal(|ui| {
@@ -835,6 +837,82 @@ impl GuiApp {
         }
     }
 
+    /// The side pane listing every mark in file order. Single-click selects
+    /// (without scrolling the list); double-click also scrolls the list to
+    /// the row; right-click offers edit/remove, mirroring the table's menu.
+    /// Only shown when at least one mark exists (see `GuiApp::ui`).
+    fn marks_panel(&mut self, ui: &mut egui::Ui) {
+        let Some(session) = &self.session else {
+            return;
+        };
+        ui.heading("Marks");
+        ui.separator();
+
+        let mut marks: Vec<(usize, String)> = session
+            .marks
+            .iter()
+            .map(|(&i, l)| (i, l.clone()))
+            .collect();
+        marks.sort_by_key(|(i, _)| *i);
+        let current = session.selected_entry_index();
+
+        let mut select_for = None;
+        let mut scroll = false;
+        let mut mark_action: Option<(usize, MarkAction)> = None;
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                for (entry_index, label) in &marks {
+                    let entry = &session.entries[*entry_index];
+                    let time = session.format_list_time(entry.timestamp_us);
+                    let text = if label.is_empty() {
+                        format!("● {time}  {}", entry.name)
+                    } else {
+                        format!("● {time}  {}\n   {label}", entry.name)
+                    };
+                    let is_current = current == Some(*entry_index);
+                    let response = ui.selectable_label(is_current, text);
+                    if response.clicked() {
+                        select_for = Some(*entry_index);
+                    }
+                    if response.double_clicked() {
+                        select_for = Some(*entry_index);
+                        scroll = true;
+                    }
+                    response.context_menu(|ui| {
+                        if ui.button("Edit label").clicked() {
+                            mark_action = Some((*entry_index, MarkAction::EditLabel));
+                            ui.close();
+                        }
+                        if ui.button("Remove mark").clicked() {
+                            mark_action = Some((*entry_index, MarkAction::Remove));
+                            ui.close();
+                        }
+                    });
+                }
+            });
+
+        if let Some(entry_index) = select_for {
+            if let Some(session) = &mut self.session {
+                session.select_entry(entry_index);
+            }
+        }
+        if scroll {
+            self.scroll_to_selected = true;
+        }
+        if let Some((entry_index, action)) = mark_action {
+            match action {
+                MarkAction::Remove => {
+                    if let Some(session) = &mut self.session {
+                        session.marks.remove(&entry_index);
+                    }
+                }
+                MarkAction::EditLabel => self.open_label_editor(entry_index),
+                MarkAction::Add => {}
+            }
+        }
+    }
+
     fn detail_panel(&self, ui: &mut egui::Ui) {
         let Some(session) = &self.session else {
             return;
@@ -923,6 +1001,12 @@ impl eframe::App for GuiApp {
         if self.session.is_some() {
             egui::Panel::right("detail").default_size(420.0).show(ui, |ui| {
                 self.detail_panel(ui);
+            });
+        }
+
+        if self.session.as_ref().is_some_and(|s| !s.marks.is_empty()) {
+            egui::Panel::left("marks").default_size(240.0).show(ui, |ui| {
+                self.marks_panel(ui);
             });
         }
 

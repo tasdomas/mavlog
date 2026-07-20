@@ -98,6 +98,15 @@ impl Session {
             .min(self.filtered.len() - 1);
     }
 
+    /// Select the visible message at or after the given entry index (the
+    /// nearest visible message when the exact entry is filtered out).
+    pub fn select_entry(&mut self, entry_index: usize) {
+        self.selected = self
+            .filtered
+            .partition_point(|&i| i < entry_index)
+            .min(self.filtered.len().saturating_sub(1));
+    }
+
     /// Regenerate the editable filter text from the current expressions.
     pub fn rebuild_filter_text(&mut self) {
         self.filter_text = self
@@ -268,10 +277,7 @@ impl Session {
                 }
                 self.plots = setup.plots;
                 self.apply_filter();
-                self.selected = self
-                    .filtered
-                    .partition_point(|&i| i < setup.selected)
-                    .min(self.filtered.len().saturating_sub(1));
+                self.select_entry(setup.selected);
                 Some(format!("Loaded setup from {path}"))
             }
             Err(err) => Some(format!("Failed to load {path}: {err}")),
@@ -332,6 +338,21 @@ mod tests {
         let mut s = session("x");
         s.jump_to_time(2_500_000);
         assert_eq!(s.selected_entry_index(), Some(2)); // ts 3_000_000
+    }
+
+    #[test]
+    fn select_entry_lands_on_nearest_visible() {
+        let mut s = session("x");
+        s.filters = parse_filters("=HEARTBEAT").unwrap();
+        s.apply_filter();
+        assert_eq!(s.filtered, vec![0, 2]);
+        // Entry 1 (ATTITUDE) is filtered out; the nearest visible at-or-after
+        // is entry 2.
+        s.select_entry(1);
+        assert_eq!(s.selected_entry_index(), Some(2));
+        // An exact visible entry selects itself.
+        s.select_entry(0);
+        assert_eq!(s.selected_entry_index(), Some(0));
     }
 
     #[test]

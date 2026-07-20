@@ -236,6 +236,16 @@ Done and committed (`532a76c`, `6e2895f`, `3289d77`, `afe38b1`):
   `session.marks` after `TableBuilder::body()` returns (kept the
   nested-closure borrows simple rather than mutating `Session` from inside
   them).
+- **Marks side pane** (`GuiApp::marks_panel`): a left `Panel` shown only when
+  `session.marks` is non-empty (adding the first mark reveals it, removing the
+  last hides it — no toolbar toggle). Lists every mark in file order
+  (time/type + label) as `selectable_label` rows, highlighting the one that is
+  the current selection. Single-click selects via `Session::select_entry`
+  (which lands on the nearest visible message when the exact entry is filtered
+  out, reusing the same partition-point logic `load_setup` uses); double-click
+  additionally sets `scroll_to_selected` so the table scrolls to the row.
+  Right-click gives Edit/Remove through the same deferred-`MarkAction` pattern
+  as the table.
 - **Filters window** (`3289d77`, `src/gui/filters.rs`): lists filters as
   `to_text()` rows with Edit/Remove, an "x of y messages shown" count, and a
   dropdown-based editor (pick an id — any or a sysid:compid pair — and/or an
