@@ -500,11 +500,16 @@ impl App {
             .type_choice
             .checked_sub(1)
             .map(|i| self.session.type_options[i].to_ascii_lowercase());
+        // Editing a disabled filter preserves its state; new ones start enabled.
+        let enabled = editor
+            .index
+            .is_none_or(|i| self.session.filters[i].enabled);
         let expr = FilterExpr {
             sysid,
             compid,
             name,
             exact: true,
+            enabled,
         };
         match editor.index {
             Some(i) => self.session.filters[i] = expr,

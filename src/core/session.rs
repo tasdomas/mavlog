@@ -72,13 +72,18 @@ impl Session {
     }
 
     /// Rebuild the visible index list, keeping the selection as close as
-    /// possible to the previously selected message.
+    /// possible to the previously selected message. Only enabled filters
+    /// participate; when none are enabled, every message is shown.
     pub fn apply_filter(&mut self) {
         let current = self.filtered.get(self.selected).copied().unwrap_or(0);
+        let has_enabled = self.filters.iter().any(|f| f.enabled);
         self.filtered = (0..self.entries.len())
             .filter(|&i| {
-                self.filters.is_empty()
-                    || self.filters.iter().any(|f| f.matches(&self.entries[i]))
+                !has_enabled
+                    || self
+                        .filters
+                        .iter()
+                        .any(|f| f.enabled && f.matches(&self.entries[i]))
             })
             .collect();
         self.selected = self
@@ -331,6 +336,48 @@ mod tests {
         assert_eq!(s.filtered, vec![0, 2]);
         // Selection moves to the nearest surviving entry at or before the old.
         assert_eq!(s.selected_entry_index(), Some(2));
+    }
+
+    #[test]
+    fn disabled_filters_do_not_narrow() {
+        let mut s = session("x");
+        // A single disabled filter matches nothing to hide: show everything.
+        s.filters = parse_filters("!=HEARTBEAT").unwrap();
+        s.apply_filter();
+        assert_eq!(s.filtered, vec![0, 1, 2, 3]);
+
+        // With one enabled and one disabled, only the enabled one applies.
+        s.filters = parse_filters("=HEARTBEAT, !=ATTITUDE").unwrap();
+        s.apply_filter();
+        assert_eq!(s.filtered, vec![0, 2]);
+
+        // Re-enabling the second filter widens the result.
+        s.filters[1].enabled = true;
+        s.apply_filter();
+        assert_eq!(s.filtered, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn disabled_filters_roundtrip_through_sidecar() {
+        let path = std::env::temp_dir()
+            .join(format!("mavlog-disabled-{}.tlog", std::process::id()));
+        let path = path.to_str().unwrap().to_string();
+
+        let mut s = session(&path);
+        s.filters = parse_filters("=HEARTBEAT, !=ATTITUDE").unwrap();
+        s.rebuild_filter_text();
+        assert_eq!(s.filter_text, "=HEARTBEAT, !=ATTITUDE");
+        s.apply_filter();
+        s.save_setup().unwrap();
+
+        let mut restored = session(&path);
+        restored.load_setup().unwrap();
+        assert_eq!(restored.filter_text, "=HEARTBEAT, !=ATTITUDE");
+        assert!(restored.filters[0].enabled);
+        assert!(!restored.filters[1].enabled);
+        assert_eq!(restored.filtered, vec![0, 2]);
+
+        let _ = std::fs::remove_file(setup_path(&path));
     }
 
     #[test]

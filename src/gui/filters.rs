@@ -171,11 +171,18 @@ pub fn show(ctx: &egui::Context, open: &mut bool, session: &mut Session, state: 
                     .type_choice
                     .checked_sub(1)
                     .map(|i| session.type_options[i].to_ascii_lowercase());
+                // Editing a disabled filter must not silently re-enable it;
+                // new filters start enabled.
+                let enabled = editor
+                    .index
+                    .and_then(|i| session.filters.get(i))
+                    .is_none_or(|f| f.enabled);
                 let expr = FilterExpr {
                     sysid,
                     compid,
                     name,
                     exact: true,
+                    enabled,
                 };
                 match editor.index {
                     Some(i) => session.filters[i] = expr,

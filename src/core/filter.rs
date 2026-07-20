@@ -12,6 +12,9 @@ pub struct FilterExpr {
     pub name: Option<String>,
     /// Match the type name exactly instead of substring/glob.
     pub exact: bool,
+    /// Disabled expressions are kept and persisted (with a '!' text prefix)
+    /// but do not participate in filtering.
+    pub enabled: bool,
 }
 
 impl FilterExpr {
@@ -38,10 +41,15 @@ impl FilterExpr {
             let name = name.to_ascii_uppercase();
             parts.push(if self.exact { format!("={name}") } else { name });
         }
-        if parts.is_empty() {
+        let text = if parts.is_empty() {
             "*".to_string()
         } else {
             parts.join(" ")
+        };
+        if self.enabled {
+            text
+        } else {
+            format!("!{text}")
         }
     }
 }
@@ -56,11 +64,21 @@ pub fn parse_filters(input: &str) -> Result<Vec<FilterExpr>, String> {
         if part.is_empty() {
             continue;
         }
+        // A leading '!' disables the expression; it is still kept and matched
+        // against in the list, just excluded from filtering.
+        let (enabled, part) = match part.strip_prefix('!') {
+            Some(rest) => (false, rest.trim_start()),
+            None => (true, part),
+        };
+        if part.is_empty() {
+            return Err("empty filter expression after '!'".to_string());
+        }
         let mut expr = FilterExpr {
             sysid: None,
             compid: None,
             name: None,
             exact: false,
+            enabled,
         };
         for token in part.split_whitespace() {
             // An id spec is digits/':'/'*' only; a bare "*" is a type pattern.
@@ -165,11 +183,26 @@ mod tests {
         assert_eq!((exprs[2].sysid, exprs[2].compid), (Some(255), None));
         assert!(exprs[2].name.is_none());
         assert_eq!((exprs[3].sysid, exprs[3].compid), (None, Some(50)));
+        assert!(exprs.iter().all(|e| e.enabled));
 
         assert!(parse_filters("").unwrap().is_empty());
         assert!(parse_filters("999 FOO").is_err());
         assert!(parse_filters("1:1 2:2").is_err());
         assert!(parse_filters("FOO BAR").is_err());
+    }
+
+    #[test]
+    fn parses_disabled_expressions() {
+        let exprs = parse_filters("=HEARTBEAT, !GPS*, !  1:1").unwrap();
+        assert!(exprs[0].enabled);
+        assert!(!exprs[1].enabled);
+        assert_eq!(exprs[1].name.as_deref(), Some("gps*"));
+        assert!(!exprs[2].enabled);
+        assert_eq!((exprs[2].sysid, exprs[2].compid), (Some(1), Some(1)));
+
+        // A '!' with nothing after it expresses intent that can't be honored.
+        assert!(parse_filters("!").is_err());
+        assert!(parse_filters("GPS, !").is_err());
     }
 
     #[test]
@@ -186,7 +219,16 @@ mod tests {
 
     #[test]
     fn filter_text_roundtrip() {
-        for text in ["1:1 =HEARTBEAT", "GPS*", "255:*", "*:50 =VFR_HUD", "*"] {
+        for text in [
+            "1:1 =HEARTBEAT",
+            "GPS*",
+            "255:*",
+            "*:50 =VFR_HUD",
+            "*",
+            "!1:1 =HEARTBEAT",
+            "!GPS*",
+            "!*",
+        ] {
             let exprs = parse_filters(text).unwrap();
             assert_eq!(exprs[0].to_text(), text, "roundtrip of '{text}'");
         }
