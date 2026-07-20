@@ -2,11 +2,17 @@
 //! `Session::plots` with per-plot Show toggles plus Edit/Remove/Add), the
 //! add/edit dialog, and the rendering of each shown plot as its own floating
 //! `egui_plot::Plot` window — the motivating feature for the whole GUI.
+//!
+//! Each plot window draws on a white canvas (light egui visuals), supports
+//! egui_plot's built-in pan/box-zoom/scroll-zoom with a Reset button, and can
+//! export its canvas to a PNG via a screenshot request (`handle_export`).
+//! Series carrying the same measurement unit share one Y axis; other units are
+//! rescaled onto extra axes (matplotlib twinx style) via [`plot::axis_groups`].
 
 use std::collections::{HashMap, HashSet};
 
 use eframe::egui;
-use egui_plot::{Legend, Line, LineStyle, PlotPoints, VLine};
+use egui_plot::{AxisHints, HPlacement, HoverPosition, Legend, Line, LineStyle, PlotPoints, VLine};
 
 use crate::core::plot::{self, PlotDef, SeriesDef};
 use crate::core::session::Session;
@@ -20,6 +26,10 @@ struct SeriesEditor {
     /// Index into `Session::type_options` (a type is required, like columns).
     type_choice: usize,
     field: String,
+    /// Optional user legend name (blank = fall back to the `type.field` label).
+    name: String,
+    /// Optional measurement unit; series sharing a unit share a Y axis.
+    unit: String,
     id_query: String,
     type_query: String,
     field_query: String,
@@ -50,7 +60,19 @@ pub struct PlotsState {
     /// loaded, so this is computed once per show/edit rather than every frame —
     /// without it, every open plot window would re-decode all of its matching
     /// entries ~60 times a second.
-    cache: HashMap<usize, Vec<Vec<[f64; 2]>>>,
+    cache: HashMap<usize, Vec<plot::SeriesData>>,
+    /// A pending "Export PNG" request awaiting the screenshot reply. Set when
+    /// the user picks a path; consumed by `handle_export` when the rendered
+    /// frame arrives as an `Event::Screenshot` (a frame or two later).
+    pending_export: Option<PendingExport>,
+}
+
+/// A plot export the user has confirmed a path for, waiting on the frame
+/// capture. `rect` is the plot's white area in UI points, cropped out of the
+/// full-viewport screenshot.
+struct PendingExport {
+    path: std::path::PathBuf,
+    rect: egui::Rect,
 }
 
 impl PlotsState {
@@ -89,9 +111,10 @@ impl PlotsState {
         self.editor_focus = false;
         self.open.clear();
         self.cache.clear();
+        self.pending_export = None;
     }
 
-    fn extract(session: &Session, plot_def: &PlotDef) -> Vec<Vec<[f64; 2]>> {
+    fn extract(session: &Session, plot_def: &PlotDef) -> Vec<plot::SeriesData> {
         plot_def.series.iter().map(|s| plot::extract(session, s)).collect()
     }
 }
@@ -101,6 +124,8 @@ fn empty_series() -> SeriesEditor {
         id_choice: 0,
         type_choice: 0,
         field: String::new(),
+        name: String::new(),
+        unit: String::new(),
         id_query: String::new(),
         type_query: String::new(),
         field_query: String::new(),
@@ -126,6 +151,8 @@ fn editor_for(session: &Session, index: Option<usize>) -> PlotEditor {
                         .position(|t| t.eq_ignore_ascii_case(&s.msg_type))
                         .unwrap_or(0),
                     field: s.field.clone(),
+                    name: s.name.clone().unwrap_or_default(),
+                    unit: s.unit.clone().unwrap_or_default(),
                     id_query: String::new(),
                     type_query: String::new(),
                     field_query: String::new(),
@@ -243,48 +270,68 @@ pub fn show_editor(ctx: &egui::Context, session: &mut Session, state: &mut Plots
 
                 let mut remove_series = None;
                 for (row, series) in editor.series.iter_mut().enumerate() {
-                    ui.horizontal(|ui| {
-                        let id_label = session.id_option_text(series.id_choice);
-                        if let Some(choice) = searchable_combo(
-                            ui,
-                            &format!("plot_series_id_{row}"),
-                            &id_label,
-                            &session.filter_dropdown_labels(0),
-                            &mut series.id_query,
-                        ) {
-                            series.id_choice = choice;
-                        }
-                        let type_label = session
-                            .type_options
-                            .get(series.type_choice)
-                            .cloned()
-                            .unwrap_or_default();
-                        if let Some(choice) = searchable_combo(
-                            ui,
-                            &format!("plot_series_type_{row}"),
-                            &type_label,
-                            &session.type_options,
-                            &mut series.type_query,
-                        ) && choice != series.type_choice
-                        {
-                            series.type_choice = choice;
-                            series.field.clear();
-                        }
-                        let field_options = session.column_dropdown_labels(3, series.type_choice);
-                        let field_label =
-                            if series.field.is_empty() { "(pick a field)" } else { &series.field };
-                        if let Some(choice) = searchable_combo(
-                            ui,
-                            &format!("plot_series_field_{row}"),
-                            field_label,
-                            &field_options,
-                            &mut series.field_query,
-                        ) {
-                            series.field = field_options[choice].clone();
-                        }
-                        if ui.small_button("Remove series").clicked() {
-                            remove_series = Some(row);
-                        }
+                    ui.group(|ui| {
+                        ui.horizontal(|ui| {
+                            let id_label = session.id_option_text(series.id_choice);
+                            if let Some(choice) = searchable_combo(
+                                ui,
+                                &format!("plot_series_id_{row}"),
+                                &id_label,
+                                &session.filter_dropdown_labels(0),
+                                &mut series.id_query,
+                            ) {
+                                series.id_choice = choice;
+                            }
+                            let type_label = session
+                                .type_options
+                                .get(series.type_choice)
+                                .cloned()
+                                .unwrap_or_default();
+                            if let Some(choice) = searchable_combo(
+                                ui,
+                                &format!("plot_series_type_{row}"),
+                                &type_label,
+                                &session.type_options,
+                                &mut series.type_query,
+                            ) && choice != series.type_choice
+                            {
+                                series.type_choice = choice;
+                                series.field.clear();
+                            }
+                            let field_options =
+                                session.column_dropdown_labels(3, series.type_choice);
+                            let field_label = if series.field.is_empty() {
+                                "(pick a field)"
+                            } else {
+                                &series.field
+                            };
+                            if let Some(choice) = searchable_combo(
+                                ui,
+                                &format!("plot_series_field_{row}"),
+                                field_label,
+                                &field_options,
+                                &mut series.field_query,
+                            ) {
+                                series.field = field_options[choice].clone();
+                            }
+                            if ui.small_button("Remove series").clicked() {
+                                remove_series = Some(row);
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Name:");
+                            ui.add(
+                                egui::TextEdit::singleline(&mut series.name)
+                                    .desired_width(140.0)
+                                    .hint_text("(legend label)"),
+                            );
+                            ui.label("Unit:");
+                            ui.add(
+                                egui::TextEdit::singleline(&mut series.unit)
+                                    .desired_width(70.0)
+                                    .hint_text("e.g. m/s"),
+                            );
+                        });
                     });
                 }
                 if let Some(row) = remove_series {
@@ -339,6 +386,8 @@ pub fn show_editor(ctx: &egui::Context, session: &mut Session, state: &mut Plots
                                 compid,
                                 msg_type: session.type_options[s.type_choice].clone(),
                                 field: s.field,
+                                name: none_if_blank(s.name),
+                                unit: none_if_blank(s.unit),
                             }
                         })
                         .collect();
@@ -376,31 +425,83 @@ pub fn show_editor(ctx: &egui::Context, session: &mut Session, state: &mut Plots
 /// plot's window (its title-bar ✕) unchecks it.
 pub fn show_open_plots(ctx: &egui::Context, session: &Session, state: &mut PlotsState) {
     let mut to_close = Vec::new();
+    // At most one export per frame; collected here and acted on after the loop
+    // so the `&state.open` borrow is released before touching other state.
+    let mut export_request: Option<(usize, egui::Rect)> = None;
     for &i in &state.open {
         let Some(plot_def) = session.plots.get(i) else {
             continue;
         };
         // Cache should already hold this plot's points (populated on show/
         // save), but recompute defensively if it doesn't rather than panic.
-        let points = state
+        let series_data = state
             .cache
             .entry(i)
             .or_insert_with(|| PlotsState::extract(session, plot_def));
         let mut still_open = true;
+        let mut result = None;
         egui::Window::new(&plot_def.name)
             .id(egui::Id::new(("plot_window", i)))
-            .default_size([500.0, 320.0])
+            .default_size([560.0, 360.0])
             .open(&mut still_open)
             .show(ctx, |ui| {
-                render_plot(ui, session, plot_def, points, i);
+                result = Some(render_plot(ui, session, plot_def, series_data, i));
             });
         if !still_open {
             to_close.push(i);
+        }
+        if let Some(r) = result
+            && r.export_clicked
+        {
+            export_request = Some((i, r.export_rect));
         }
     }
     for i in to_close {
         state.open.remove(&i);
         state.cache.remove(&i);
+    }
+
+    // An "Export PNG" click: ask for a path (blocking, like opening a file),
+    // then request a screenshot. The capture arrives a frame or two later and
+    // is cropped/saved by `handle_export`.
+    if let Some((i, rect)) = export_request
+        && let Some(name) = session.plots.get(i).map(|p| p.name.clone())
+        && let Some(path) = rfd::FileDialog::new()
+            .add_filter("PNG image", &["png"])
+            .set_file_name(format!("{name}.png"))
+            .save_file()
+    {
+        state.pending_export = Some(PendingExport { path, rect });
+        ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
+    }
+}
+
+/// If an export is pending and this frame delivered its screenshot, crop the
+/// plot area out of the full-viewport capture and write it as a PNG. Returns a
+/// status message (success or failure) to surface in the status bar, or `None`
+/// when there is nothing to do. Call once per frame from the app's `update`.
+pub fn handle_export(ctx: &egui::Context, state: &mut PlotsState) -> Option<String> {
+    // Nothing requested → don't consume any screenshot events (other code may
+    // rely on them in the future).
+    state.pending_export.as_ref()?;
+    let screenshot = ctx.input(|i| {
+        i.raw.events.iter().find_map(|e| match e {
+            egui::Event::Screenshot { image, .. } => Some(image.clone()),
+            _ => None,
+        })
+    })?;
+    let PendingExport { path, rect } = state.pending_export.take()?;
+    let cropped = screenshot.region(&rect, Some(ctx.pixels_per_point()));
+    let [w, h] = cropped.size;
+    match image::save_buffer(
+        &path,
+        cropped.as_raw(),
+        w as u32,
+        h as u32,
+        image::ExtendedColorType::Rgba8,
+    ) {
+        Ok(()) => Some(format!("Plot exported to {}", path.display())),
+        Err(e) => Some(format!("Plot export failed: {e}")),
     }
 }
 
@@ -408,15 +509,51 @@ pub fn show_open_plots(ctx: &egui::Context, session: &Session, state: &mut Plots
 /// (`super::MARK_BG`), brightened so a 1px dashed line stays visible.
 const MARK_LINE: egui::Color32 = egui::Color32::from_rgb(220, 70, 70);
 
+/// What a plot window reports back to `show_open_plots`: the on-screen rect of
+/// its white canvas (for cropping a screenshot) and whether Export was clicked.
+struct RenderResult {
+    export_rect: egui::Rect,
+    export_clicked: bool,
+}
+
+/// Format a plot x coordinate (microsecond timestamp) as time, matching the
+/// x-axis ticks. Shared by the axis formatter and the hover label.
+fn fmt_time(value: f64, time_format: TimeFormat, start_us: u64) -> String {
+    match time_format {
+        TimeFormat::DateTime => format_datetime(value.max(0.0) as u64),
+        TimeFormat::OffsetSecs => format_offset(value.max(0.0) as u64, start_us),
+    }
+}
+
 fn render_plot(
     ui: &mut egui::Ui,
     session: &Session,
     plot_def: &PlotDef,
-    points: &[Vec<[f64; 2]>],
+    series_data: &[plot::SeriesData],
     plot_index: usize,
-) {
+) -> RenderResult {
     let time_format = session.time_format;
     let start_us = session.start_us;
+
+    // Toolbar, kept outside the white frame so it is not part of the export.
+    let mut reset = false;
+    let mut export_clicked = false;
+    ui.horizontal(|ui| {
+        reset = ui
+            .button("Reset view")
+            .on_hover_text("Restore auto bounds (or double-click the plot)")
+            .clicked();
+        export_clicked = ui
+            .button("Export PNG…")
+            .on_hover_text("Save the plot area to a PNG image")
+            .clicked();
+        ui.label(
+            egui::RichText::new("right-drag: box zoom · scroll: zoom · double-click: reset")
+                .weak()
+                .small(),
+        );
+    });
+
     // Marks are only collected/drawn when this plot opts into them.
     let marks: Vec<(usize, f64, &str)> = if plot_def.show_marks {
         session
@@ -431,64 +568,176 @@ fn render_plot(
         Vec::new()
     };
 
-    let response = egui_plot::Plot::new(("plot", plot_index))
-        .legend(Legend::default())
-        .x_axis_formatter(move |mark, _range| match time_format {
-            TimeFormat::DateTime => format_datetime(mark.value.max(0.0) as u64),
-            TimeFormat::OffsetSecs => format_offset(mark.value.max(0.0) as u64, start_us),
+    // Group series into shared Y axes by unit. Non-primary groups are drawn
+    // rescaled into the primary group's coordinate space so one plot transform
+    // can host several units at once (egui_plot's custom axes are display-only).
+    let groups = plot::axis_groups(&plot_def.series, series_data);
+    let multi_axis = groups.len() > 1;
+    // Per-series affine map `(scale, offset)` into the shared space.
+    let mut xform = vec![(1.0_f64, 0.0_f64); plot_def.series.len()];
+    for g in &groups {
+        for &row in &g.series {
+            xform[row] = (g.scale, g.offset);
+        }
+    }
+    // Hover lookup keyed by legend label: real values are recovered by
+    // inverting each series' affine map.
+    let hover: Vec<(String, f64, f64, Option<String>)> = plot_def
+        .series
+        .iter()
+        .enumerate()
+        .map(|(row, s)| {
+            let unit = s.unit.clone().filter(|u| !u.trim().is_empty());
+            (series_label(s), xform[row].0, xform[row].1, unit)
         })
-        .show(ui, |plot_ui| {
-            for (series, series_points) in plot_def.series.iter().zip(points) {
-                let label = series_label(series);
-                plot_ui.line(Line::new(label, PlotPoints::from(series_points.clone())));
+        .collect();
+
+    // White canvas: light visuals give a white plot background plus readable
+    // grid/tick/legend colors; the frame fill also covers the axis strips that
+    // sit just outside egui_plot's inner (white) rect.
+    let framed = egui::Frame::new()
+        .fill(egui::Color32::WHITE)
+        .inner_margin(6.0)
+        .show(ui, |ui| {
+            ui.style_mut().visuals = egui::Visuals::light();
+
+            let mut plot = egui_plot::Plot::new(("plot", plot_index))
+                .legend(Legend::default())
+                .allow_boxed_zoom(true)
+                .allow_double_click_reset(true)
+                .x_axis_formatter(move |mark, _range| fmt_time(mark.value, time_format, start_us))
+                .label_formatter(move |pos| match pos {
+                    HoverPosition::NearDataPoint { plot_name, position, .. } => {
+                        let (scale, offset, unit) = hover
+                            .iter()
+                            .find(|(l, ..)| l.as_str() == *plot_name)
+                            .map(|(_, s, o, u)| (*s, *o, u.clone()))
+                            .unwrap_or((1.0, 0.0, None));
+                        let real_y = (position.y - offset) / scale;
+                        let unit = unit.map(|u| format!(" {u}")).unwrap_or_default();
+                        Some(format!(
+                            "{plot_name}\n{}\n{real_y:.3}{unit}",
+                            fmt_time(position.x, time_format, start_us)
+                        ))
+                    }
+                    HoverPosition::Elsewhere { position } => Some(format!(
+                        "{}\n{:.3}",
+                        fmt_time(position.x, time_format, start_us),
+                        position.y
+                    )),
+                });
+
+            // One Y axis per unit group when there is more than one; otherwise
+            // just label the single axis with its unit (if any).
+            if multi_axis {
+                let hints: Vec<AxisHints> = groups
+                    .iter()
+                    .enumerate()
+                    .map(|(gi, g)| {
+                        let (scale, offset) = (g.scale, g.offset);
+                        let placement =
+                            if gi == 0 { HPlacement::Left } else { HPlacement::Right };
+                        AxisHints::new_y()
+                            .label(g.unit.clone().unwrap_or_default())
+                            .placement(placement)
+                            .formatter(move |mark, _range| {
+                                let real = (mark.value - offset) / scale;
+                                let real_step = (mark.step_size / scale).abs();
+                                let decimals = if real_step > 0.0 {
+                                    (-real_step.log10()).round().max(0.0) as usize
+                                } else {
+                                    0
+                                };
+                                egui_plot::format_number(real, decimals)
+                            })
+                    })
+                    .collect();
+                plot = plot.custom_y_axes(hints);
+            } else if let Some(unit) = groups.first().and_then(|g| g.unit.clone()) {
+                plot = plot.y_axis_label(unit);
             }
-            for &(entry_index, x, _) in &marks {
-                // A fixed color: the default (transparent) would consume the
-                // next color from the same auto-color cycle the data series
-                // draw from, making marks look like just another series.
-                // An empty name keeps marks out of the legend (their labels
-                // are painted onto the plot below instead), which is also
-                // why the id must be explicit: egui_plot derives item ids
-                // from names, and identical names mean one shared id,
-                // corrupting per-item hover state.
-                plot_ui.vline(
-                    VLine::new("", x)
-                        .id(egui::Id::new(("mark", entry_index)))
-                        .color(MARK_LINE)
-                        .width(1.5)
-                        .style(LineStyle::dashed_loose()),
+
+            let response = plot.show(ui, |plot_ui| {
+                if reset {
+                    plot_ui.set_auto_bounds(true);
+                }
+                for (row, (series, data)) in
+                    plot_def.series.iter().zip(series_data).enumerate()
+                {
+                    let (scale, offset) = xform[row];
+                    let points: Vec<[f64; 2]> = if scale == 1.0 && offset == 0.0 {
+                        data.points.clone()
+                    } else {
+                        data.points.iter().map(|&[x, y]| [x, y * scale + offset]).collect()
+                    };
+                    let label = series_label(series);
+                    // Explicit id: egui_plot derives item ids from names, and
+                    // user-set series names can collide — a shared id would
+                    // corrupt per-item hover state (same reason as the VLines).
+                    plot_ui.line(
+                        Line::new(label, PlotPoints::from(points))
+                            .id(egui::Id::new(("plot_series", plot_index, row))),
+                    );
+                }
+                for &(entry_index, x, _) in &marks {
+                    // A fixed color: the default (transparent) would consume the
+                    // next color from the same auto-color cycle the data series
+                    // draw from, making marks look like just another series.
+                    // An empty name keeps marks out of the legend (their labels
+                    // are painted onto the plot below instead), which is also
+                    // why the id must be explicit: egui_plot derives item ids
+                    // from names, and identical names mean one shared id,
+                    // corrupting per-item hover state.
+                    plot_ui.vline(
+                        VLine::new("", x)
+                            .id(egui::Id::new(("mark", entry_index)))
+                            .color(MARK_LINE)
+                            .width(1.5)
+                            .style(LineStyle::dashed_loose()),
+                    );
+                }
+            });
+
+            // Mark labels: vertical text rising from the bottom of the plot
+            // beside each mark's line. Painted after the plot because
+            // egui_plot's own Text item can't rotate; the PlotResponse
+            // transform maps the mark's time to a screen x.
+            let frame = *response.transform.frame();
+            let painter = ui.painter().with_clip_rect(frame.intersect(ui.clip_rect()));
+            let font = egui::TextStyle::Small.resolve(ui.style());
+            for &(_, x, label) in &marks {
+                if label.is_empty() {
+                    continue;
+                }
+                let line_x = response.transform.position_from_point_x(x);
+                if !frame.x_range().contains(line_x) {
+                    continue;
+                }
+                let galley = painter.layout_no_wrap(label.to_string(), font.clone(), MARK_LINE);
+                // TextShape rotates clockwise around `pos` (the galley's
+                // unrotated top-left), so -90° makes the text read bottom-up,
+                // its glyph column just right of the mark line.
+                let pos = egui::pos2(line_x + 3.0, frame.bottom() - 4.0);
+                painter.add(
+                    egui::epaint::TextShape::new(pos, galley, MARK_LINE)
+                        .with_angle(-std::f32::consts::FRAC_PI_2),
                 );
             }
         });
 
-    // Mark labels: vertical text rising from the bottom of the plot beside
-    // each mark's line. Painted after the plot because egui_plot's own Text
-    // item can't rotate; the PlotResponse transform maps the mark's time to
-    // a screen x.
-    let frame = *response.transform.frame();
-    let painter = ui.painter().with_clip_rect(frame.intersect(ui.clip_rect()));
-    let font = egui::TextStyle::Small.resolve(ui.style());
-    for &(_, x, label) in &marks {
-        if label.is_empty() {
-            continue;
-        }
-        let line_x = response.transform.position_from_point_x(x);
-        if !frame.x_range().contains(line_x) {
-            continue;
-        }
-        let galley = painter.layout_no_wrap(label.to_string(), font.clone(), MARK_LINE);
-        // TextShape rotates clockwise around `pos` (the galley's unrotated
-        // top-left), so -90° makes the text read bottom-up, its glyph
-        // column just right of the mark line.
-        let pos = egui::pos2(line_x + 3.0, frame.bottom() - 4.0);
-        painter.add(
-            egui::epaint::TextShape::new(pos, galley, MARK_LINE)
-                .with_angle(-std::f32::consts::FRAC_PI_2),
-        );
-    }
+    RenderResult { export_rect: framed.response.rect, export_clicked }
+}
+
+/// Trim `s`; return `None` if nothing is left, else the trimmed owned string.
+fn none_if_blank(s: String) -> Option<String> {
+    let t = s.trim();
+    (!t.is_empty()).then(|| t.to_string())
 }
 
 fn series_label(series: &SeriesDef) -> String {
+    if let Some(name) = series.name.as_ref().filter(|n| !n.is_empty()) {
+        return name.clone();
+    }
     match series.sysid.zip(series.compid) {
         Some((s, c)) => format!("{s}:{c} {}.{}", series.msg_type, series.field),
         None => format!("{}.{}", series.msg_type, series.field),

@@ -2296,6 +2296,7 @@ dependencies = [
  "eframe",
  "egui_extras",
  "egui_plot",
+ "image",
  "mavlink",
  "ratatui",
  "rfd",

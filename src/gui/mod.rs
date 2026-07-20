@@ -666,6 +666,23 @@ impl GuiApp {
                         ui.label(desc);
                     });
                 }
+                ui.add_space(8.0);
+                ui.label(egui::RichText::new("Plot windows").strong());
+                ui.add_space(4.0);
+                for (action, desc) in [
+                    ("Left-drag", "Pan the view"),
+                    ("Right-drag", "Box-zoom into a rectangle"),
+                    ("Scroll / pinch", "Zoom (drag on an axis to zoom just that axis)"),
+                    ("Double-click / Reset view", "Restore auto bounds"),
+                    ("Export PNG…", "Save the plot area to an image file"),
+                ] {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(action).strong());
+                        ui.label(desc);
+                    });
+                }
+                ui.add_space(4.0);
+                ui.label("Series sharing a measurement unit share one Y axis; other units get their own.");
             });
         self.help_open = open;
     }
@@ -1057,6 +1074,11 @@ impl eframe::App for GuiApp {
         if let Some(session) = &mut self.session {
             plots::show_editor(&ctx, session, &mut self.plots_state);
             plots::show_open_plots(&ctx, session, &mut self.plots_state);
+        }
+        // A pending plot export completes when its screenshot arrives (a frame
+        // or two after the request), independent of whether a session is open.
+        if let Some(msg) = plots::handle_export(&ctx, &mut self.plots_state) {
+            self.status = Some(msg);
         }
 
         if let Some(message) = self.error.clone() {
