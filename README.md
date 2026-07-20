@@ -40,24 +40,34 @@ inside them immediately:
 | Ctrl/Cmd+O or `o` | Open a tlog file |
 | Ctrl/Cmd+S or `w` | Save the setup sidecar |
 | Ctrl/Cmd+J or `t` | Focus the jump-to-time box |
-| Ctrl/Cmd+F or `f` | Toggle the Filters window |
+| Ctrl/Cmd+F or `f` | Toggle the Filters panel |
 | Ctrl/Cmd+Shift+C or `c` | Toggle the Columns window |
 | Ctrl/Cmd+P or `p` | Add a new plot |
 | Ctrl/Cmd+, or `s` | Toggle Settings |
 | F1 or `?` | Toggle the Help window |
-| Ctrl/Cmd+N or `a` | Add a filter/column, in whichever of those windows is open |
+| Ctrl/Cmd+N or `a` | Add a filter/column, in the Filters panel or Columns window |
 | Tab / Shift+Tab | Move focus between controls (stays inside an open popup) |
 | Up / Down | Move the selection |
 | Page Up / Page Down | Move the selection by a page |
 | Home / End | Jump to the first / last message |
 | Space | Toggle a mark on the selected message |
 | Enter | Submit a box, save an open filter/column/plot editor, or dismiss an error |
-| Esc | Release a text box's focus, then cancel an open editor, then close a window |
+| Esc | Release a text box's focus, then cancel an open editor, then close a window or panel |
 
 Hovering any toolbar button shows its shortcut. Click a row to select it;
 right-click for a mark context menu; drag a `.tlog` file onto the window to
 open it. The in-app Help window (toolbar, or F1/`?`) lists the same
 shortcuts.
+
+### Filters
+
+Press Ctrl/Cmd+F or `f` (or the toolbar's **Filters**) to open the Filters
+panel, docked in the right column below the message contents view. Each filter
+has a checkbox: untick it to disable the filter without removing it, and the
+message list re-narrows immediately. A message is shown when it matches any
+enabled filter (or when none are enabled). Disabled filters are remembered in
+the saved setup, written with a leading `!` in the filter text (e.g.
+`!1:1 =HEARTBEAT`).
 
 ### Plots
 
