@@ -10,6 +10,14 @@ use crate::tlog;
 pub struct PlotDef {
     pub name: String,
     pub series: Vec<SeriesDef>,
+    /// Whether mark lines/labels are drawn on this plot. Defaulted to `true`
+    /// so sidecars saved before the flag existed keep showing marks.
+    #[serde(default = "default_true")]
+    pub show_marks: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// One series: values of `field` from messages matching `sysid:compid` (any
@@ -137,6 +145,15 @@ mod tests {
             field: "mavtype".to_string(),
         };
         assert!(extract(&session, &series).is_empty());
+    }
+
+    #[test]
+    fn plotdef_defaults_show_marks_to_true() {
+        // A sidecar saved before `show_marks` existed omits the field; it must
+        // deserialize with marks enabled to preserve the old behavior.
+        let json = r#"{"name":"p","series":[]}"#;
+        let plot: PlotDef = serde_json::from_str(json).unwrap();
+        assert!(plot.show_marks);
     }
 
     #[test]

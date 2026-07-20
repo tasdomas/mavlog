@@ -1,8 +1,8 @@
-//! The Plots manager window (create/edit/remove `Session::plots`, toggle
-//! which ones are open) and the rendering of each open plot as its own
-//! `egui_plot::Plot` window — the motivating feature for the whole GUI.
+//! The Plots manager window (create/edit/remove `Session::plots`) and the
+//! rendering of every configured plot, stacked in a sidebar beneath the
+//! message list — the motivating feature for the whole GUI.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use eframe::egui;
 use egui_plot::{Legend, Line, LineStyle, PlotPoints, VLine};
@@ -29,9 +29,10 @@ struct PlotEditor {
     index: Option<usize>,
     name: String,
     series: Vec<SeriesEditor>,
+    show_marks: bool,
 }
 
-/// State for the Plots manager and its open plot windows; owned by `GuiApp`.
+/// State for the Plots manager and the plots sidebar; owned by `GuiApp`.
 #[derive(Default)]
 pub struct PlotsState {
     manager_open: bool,
@@ -40,13 +41,11 @@ pub struct PlotsState {
     focus_on_open: bool,
     editor: Option<PlotEditor>,
     error: Option<String>,
-    /// Indices into `Session::plots` currently shown as plot windows.
-    open: HashSet<usize>,
-    /// Extracted (and decimated) points per open plot's series, indexed like
-    /// `open`. `Session`'s underlying tlog data never changes once loaded, so
-    /// this is computed once per show/edit rather than every frame — without
-    /// it, every open plot window would re-decode all of its matching
-    /// entries ~60 times a second.
+    /// Extracted (and decimated) points per plot's series, keyed by index into
+    /// `Session::plots`. `Session`'s underlying tlog data never changes once
+    /// loaded, so this is computed lazily once per plot rather than every
+    /// frame — without it, the sidebar would re-decode all of every plot's
+    /// matching entries ~60 times a second.
     cache: HashMap<usize, Vec<Vec<[f64; 2]>>>,
 }
 
@@ -86,6 +85,14 @@ impl PlotsState {
     pub fn cancel_editor(&mut self) {
         self.editor = None;
         self.error = None;
+    }
+
+    /// Discard cached points and any open editor. Called when a new file is
+    /// loaded, since the cache is keyed by index into the old file's plots.
+    pub fn reset(&mut self) {
+        self.editor = None;
+        self.error = None;
+        self.cache.clear();
     }
 
     fn extract(session: &Session, plot_def: &PlotDef) -> Vec<Vec<[f64; 2]>> {
@@ -134,6 +141,7 @@ fn editor_for(session: &Session, index: Option<usize>) -> PlotEditor {
         index,
         name: plot.map(|p| p.name.clone()).unwrap_or_default(),
         series,
+        show_marks: plot.is_none_or(|p| p.show_marks),
     }
 }
 
@@ -156,18 +164,6 @@ pub fn show_manager(ctx: &egui::Context, session: &mut Session, state: &mut Plot
                 ui.horizontal(|ui| {
                     let series_summary = plot_def.series.len();
                     ui.label(format!("{} ({series_summary} series)", plot_def.name));
-                    let mut shown = state.open.contains(&i);
-                    if ui.checkbox(&mut shown, "Show").clicked() {
-                        if shown {
-                            state.open.insert(i);
-                            state
-                                .cache
-                                .entry(i)
-                                .or_insert_with(|| PlotsState::extract(session, plot_def));
-                        } else {
-                            state.open.remove(&i);
-                        }
-                    }
                     if ui.small_button("Edit").clicked() {
                         edit = Some(i);
                     }
@@ -180,7 +176,6 @@ pub fn show_manager(ctx: &egui::Context, session: &mut Session, state: &mut Plot
             if let Some(i) = remove {
                 session.plots.remove(i);
                 let reindex = |o: usize| if o > i { o - 1 } else { o };
-                state.open = state.open.iter().filter(|&&o| o != i).map(|&o| reindex(o)).collect();
                 state.cache = state
                     .cache
                     .drain()
@@ -229,6 +224,7 @@ pub fn show_manager(ctx: &egui::Context, session: &mut Session, state: &mut Plot
                     ui.label("Name:");
                     ui.text_edit_singleline(&mut editor.name);
                 });
+                ui.checkbox(&mut editor.show_marks, "Show markers");
 
                 let mut remove_series = None;
                 for (row, series) in editor.series.iter_mut().enumerate() {
@@ -331,7 +327,7 @@ pub fn show_manager(ctx: &egui::Context, session: &mut Session, state: &mut Plot
                             }
                         })
                         .collect();
-                    let plot_def = PlotDef { name, series };
+                    let plot_def = PlotDef { name, series, show_marks: editor.show_marks };
                     let index = match editor.index {
                         Some(i) => {
                             session.plots[i] = plot_def;
@@ -339,18 +335,12 @@ pub fn show_manager(ctx: &egui::Context, session: &mut Session, state: &mut Plot
                         }
                         None => {
                             session.plots.push(plot_def);
-                            let i = session.plots.len() - 1;
-                            state.open.insert(i);
-                            i
+                            session.plots.len() - 1
                         }
                     };
-                    // Edited series definitions invalidate any cached points.
-                    if state.open.contains(&index) {
-                        let points = PlotsState::extract(session, &session.plots[index]);
-                        state.cache.insert(index, points);
-                    } else {
-                        state.cache.remove(&index);
-                    }
+                    // Edited series definitions invalidate any cached points;
+                    // the sidebar refills the cache lazily next frame.
+                    state.cache.remove(&index);
                     state.error = None;
                 }
             } else if cancel {
@@ -360,35 +350,29 @@ pub fn show_manager(ctx: &egui::Context, session: &mut Session, state: &mut Plot
         });
 }
 
-/// Show every currently-open plot as its own `egui_plot::Plot` window.
-pub fn show_open_plots(ctx: &egui::Context, session: &Session, state: &mut PlotsState) {
-    let mut to_close = Vec::new();
-    for &i in &state.open {
-        let Some(plot_def) = session.plots.get(i) else {
-            continue;
-        };
-        // Cache should already hold this plot's points (populated on show/
-        // save), but recompute defensively if it doesn't rather than panic.
-        let points = state
-            .cache
-            .entry(i)
-            .or_insert_with(|| PlotsState::extract(session, plot_def));
-        let mut still_open = true;
-        egui::Window::new(&plot_def.name)
-            .id(egui::Id::new(("plot_window", i)))
-            .default_size([500.0, 320.0])
-            .open(&mut still_open)
-            .show(ctx, |ui| {
+/// Height of each plot in the sidebar; every configured plot is stacked
+/// vertically at this height and the whole sidebar scrolls when they overflow.
+const PLOT_HEIGHT: f32 = 220.0;
+
+/// Render the plots sidebar: every configured plot stacked vertically. Shown
+/// by `GuiApp` in a bottom panel beneath the message list.
+pub fn show_sidebar(ui: &mut egui::Ui, session: &Session, state: &mut PlotsState) {
+    if session.plots.is_empty() {
+        return;
+    }
+    egui::ScrollArea::vertical()
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            for (i, plot_def) in session.plots.iter().enumerate() {
+                let points = state
+                    .cache
+                    .entry(i)
+                    .or_insert_with(|| PlotsState::extract(session, plot_def));
+                ui.strong(&plot_def.name);
                 render_plot(ui, session, plot_def, points, i);
-            });
-        if !still_open {
-            to_close.push(i);
-        }
-    }
-    for i in to_close {
-        state.open.remove(&i);
-        state.cache.remove(&i);
-    }
+                ui.add_space(8.0);
+            }
+        });
 }
 
 /// Vertical mark lines use the same red as the list's marked-row background
@@ -404,17 +388,23 @@ fn render_plot(
 ) {
     let time_format = session.time_format;
     let start_us = session.start_us;
-    let marks: Vec<(usize, f64, &str)> = session
-        .marks
-        .iter()
-        .map(|(&entry_index, label)| {
-            let ts = session.entries[entry_index].timestamp_us;
-            (entry_index, ts as f64, label.as_str())
-        })
-        .collect();
+    // Marks are only collected/drawn when this plot opts into them.
+    let marks: Vec<(usize, f64, &str)> = if plot_def.show_marks {
+        session
+            .marks
+            .iter()
+            .map(|(&entry_index, label)| {
+                let ts = session.entries[entry_index].timestamp_us;
+                (entry_index, ts as f64, label.as_str())
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
 
     let response = egui_plot::Plot::new(("plot", plot_index))
         .legend(Legend::default())
+        .height(PLOT_HEIGHT)
         .x_axis_formatter(move |mark, _range| match time_format {
             TimeFormat::DateTime => format_datetime(mark.value.max(0.0) as u64),
             TimeFormat::OffsetSecs => format_offset(mark.value.max(0.0) as u64, start_us),

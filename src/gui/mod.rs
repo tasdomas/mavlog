@@ -217,6 +217,8 @@ impl GuiApp {
                 self.session = Some(session);
                 self.error = None;
                 self.scroll_to_selected = true;
+                // The plots cache is keyed by index into the old file's plots.
+                self.plots_state.reset();
             }
             Err(e) => self.error = Some(e.to_string()),
         }
@@ -496,8 +498,8 @@ impl GuiApp {
     /// pull it back to the top-most popup's entry button. Only Tab-moved
     /// focus is corrected — a deliberate click on a background widget
     /// (e.g. into the jump box) must keep the focus it asked for. Popups
-    /// and plot windows live in non-background layers, so tabbing between
-    /// two open popups stays allowed.
+    /// live in non-background layers, so tabbing between two open popups
+    /// stays allowed.
     fn keep_focus_in_popups(&mut self, ctx: &egui::Context) {
         if !self.tab_pressed_last_frame {
             return;
@@ -1014,6 +1016,21 @@ impl eframe::App for GuiApp {
             });
         }
 
+        // The plots sidebar sits under the message list (central region only,
+        // not the detail column), mounted before the CentralPanel so the
+        // central panel fills the space above it. Shown only when at least one
+        // plot is configured, mirroring the marks pane.
+        if self.session.as_ref().is_some_and(|s| !s.plots.is_empty()) {
+            egui::Panel::bottom("plots")
+                .resizable(true)
+                .default_size(260.0)
+                .show(ui, |ui| {
+                    if let Some(session) = &self.session {
+                        plots::show_sidebar(ui, session, &mut self.plots_state);
+                    }
+                });
+        }
+
         egui::CentralPanel::default().show(ui, |ui| self.list_panel(ui));
 
         self.settings_window(&ctx);
@@ -1035,7 +1052,6 @@ impl eframe::App for GuiApp {
         }
         if let Some(session) = &mut self.session {
             plots::show_manager(&ctx, session, &mut self.plots_state);
-            plots::show_open_plots(&ctx, session, &mut self.plots_state);
         }
 
         if let Some(message) = self.error.clone() {
