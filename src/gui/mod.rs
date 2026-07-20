@@ -1009,32 +1009,30 @@ impl eframe::App for GuiApp {
 
         if self.session.is_some() {
             egui::Panel::right("detail").default_size(420.0).show(ui, |ui| {
-                // The marks list sits under the detail view, in the same
-                // right column. Added first so it reserves the bottom strip;
-                // the detail pane then fills the space above it.
+                // Both the marks list and the plots sidebar sit under the
+                // message contents view, in the same right column. Bottom
+                // panels are added outermost-first, so marks takes the very
+                // bottom and the plots block sits between the contents and the
+                // marks; the detail pane then fills the space above them. Each
+                // is shown only when it has content.
                 if self.session.as_ref().is_some_and(|s| !s.marks.is_empty()) {
                     egui::Panel::bottom("marks")
                         .resizable(true)
                         .default_size(220.0)
                         .show(ui, |ui| self.marks_panel(ui));
                 }
+                if self.session.as_ref().is_some_and(|s| !s.plots.is_empty()) {
+                    egui::Panel::bottom("plots")
+                        .resizable(true)
+                        .default_size(240.0)
+                        .show(ui, |ui| {
+                            if let Some(session) = &mut self.session {
+                                plots::show_sidebar(ui, session, &mut self.plots_state);
+                            }
+                        });
+                }
                 self.detail_panel(ui);
             });
-        }
-
-        // The plots sidebar: a resizable panel under the message list (added
-        // after the detail panel, so it spans only the central column, not the
-        // detail column on the right). Shown whenever any plots are configured;
-        // each plot's own window is drawn from `show_open_plots` below.
-        if self.session.as_ref().is_some_and(|s| !s.plots.is_empty()) {
-            egui::Panel::bottom("plots")
-                .resizable(true)
-                .default_size(240.0)
-                .show(ui, |ui| {
-                    if let Some(session) = &mut self.session {
-                        plots::show_sidebar(ui, session, &mut self.plots_state);
-                    }
-                });
         }
 
         egui::CentralPanel::default().show(ui, |ui| self.list_panel(ui));

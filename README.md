@@ -63,8 +63,9 @@ shortcuts.
 
 Press Ctrl/Cmd+P or `p` (or the toolbar's **Add plot**) to open the plot
 dialog and define a plot — a name and one or more fields graphed against time.
-Configured plots are listed in a sidebar under the message list; tick a plot's
-**Show** box to open it in its own movable window, which updates as you browse.
+Configured plots are listed in a sidebar in the right column, below the
+message contents view; tick a plot's **Show** box to open it in its own movable
+window, which updates as you browse.
 Each plot can optionally overlay vertical lines at your marks — toggle "Show
 markers" in the dialog. Zoom, pan and hover come from the plot widget itself.
 

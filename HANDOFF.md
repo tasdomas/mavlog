@@ -115,8 +115,9 @@ src/
                    Save/Cancel, mirrors the TUI's ColumnEditor.
     plots.rs     — show_sidebar: plot list (per-plot Show toggle / Edit /
                    Remove + an Add button), rendered by GuiApp into a bottom
-                   Panel("plots") under the message list whenever any plots
-                   exist. show_editor: the add/edit dialog (name / "Show
+                   Panel("plots") nested in the right detail column (below the
+                   message contents view) whenever any plots exist.
+                   show_editor: the add/edit dialog (name / "Show
                    markers" / series rows reusing searchable_combo /
                    Save-Cancel) as a floating window, opened by
                    PlotsState::add_plot (the `p` shortcut) or a row's Edit.
@@ -418,11 +419,12 @@ Not one of the original 5 phases; requested afterward (branch
 that where they conflict:
 - Final layout (after several intermediate iterations — a docked bottom sidebar
   showing the plots themselves; then one window holding all plots; then the plot
-  *list* as a collapsible right panel): the **plot list** lives in a bottom
-  `Panel("plots")` under the message list (`gui/plots.rs::show_sidebar`, mounted
-  in `GuiApp::ui` after the detail panel and before the `CentralPanel`, so it
-  spans the central column only). It is shown **whenever `session.plots` is
-  non-empty** — there is no toggle. Each row has a per-plot **Show** checkbox
+  *list* as a collapsible right panel; then under the message list): the **plot
+  list** lives in a bottom `Panel("plots")` nested inside the right `"detail"`
+  panel, below the message contents view (`gui/plots.rs::show_sidebar`), beside
+  the marks pane (marks takes the very bottom, plots sits above it). It is shown
+  **whenever `session.plots` is non-empty** — there is no toggle. Each row has a
+  per-plot **Show** checkbox
   that adds/removes its index from `PlotsState::open`; every open plot draws in
   **its own** `egui_plot::Plot` window via `show_open_plots`.
 - The **add/edit dialog** is a separate floating window (`show_editor`), opened
