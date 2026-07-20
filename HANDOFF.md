@@ -113,11 +113,14 @@ src/
                    Save/Cancel, mirrors the TUI's FilterEditor.
     columns.rs   — Columns window: list + editor (name/id/type/field) +
                    Save/Cancel, mirrors the TUI's ColumnEditor.
-    plots.rs     — Plots manager window (list/Show-toggle/Edit/Remove/Add,
-                   variable-length series editor reusing searchable_combo)
-                   + rendering of each shown plot as its own egui_plot::Plot
-                   window. PlotsState::cache holds extracted points per open
-                   plot so they aren't re-decoded every frame.
+    plots.rs     — Plots manager window (list/Edit/Remove/Add, variable-length
+                   series editor reusing searchable_combo, per-plot "Show
+                   markers" checkbox) + show_sidebar: every configured plot
+                   rendered as an egui_plot::Plot, stacked in the bottom
+                   "plots" panel beneath the message list. PlotsState::cache
+                   holds extracted points per plot (keyed by index into
+                   Session::plots) so they aren't re-decoded every frame;
+                   PlotsState::reset clears it when a new file is opened.
 ```
 
 ### `Session` (src/core/session.rs) — the shared heart
@@ -403,6 +406,28 @@ code:
   widget (e.g. the jump box) keeps its focus; cross-popup tabbing stays
   allowed since popups aren't the background layer. Don't replace this
   with `set_modal_layer` without accepting those interaction losses.
+
+### Follow-up: plots sidebar + per-plot markers — DONE
+Not one of the original 5 phases; requested afterward (branch
+`feat/multiple-plots`). Supersedes the "each shown plot is its own
+`egui_plot::Plot` window" design in the Phase 4 notes above — read this over
+that where they conflict:
+- Plots are no longer floating windows toggled by a per-plot "Show" checkbox.
+  **Every** configured plot is always rendered, stacked in a resizable bottom
+  `egui::Panel` (`"plots"`) beneath the message list (mounted in `GuiApp::ui`
+  before the `CentralPanel`, only when `session.plots` is non-empty — mirrors
+  the marks pane). `gui/plots.rs::show_open_plots` was replaced by
+  `show_sidebar(ui, session, state)`, which lazily fills `PlotsState::cache`
+  (`.entry(i).or_insert_with(...)`) and draws each plot at a fixed
+  `PLOT_HEIGHT` via `render_plot`. The `PlotsState::open: HashSet` field is
+  gone; the cache is unchanged in purpose (still keyed by index into
+  `Session::plots`, still the perf guard the Phase 4 note describes — don't
+  remove it). `PlotsState::reset()` clears it on file open.
+- `PlotDef` gained `show_marks: bool` (`#[serde(default = "default_true")]`, so
+  pre-existing sidecars load with marks on — same forward-compat trick as
+  `Setup::plots`). The plot editor has a "Show markers" checkbox; `render_plot`
+  skips the mark `VLine`s and rotated labels entirely when it's false (it just
+  builds an empty `marks` vec).
 
 ## egui/eframe 0.35 API notes (verified against vendored source — don't re-derive)
 

@@ -59,6 +59,15 @@ right-click for a mark context menu; drag a `.tlog` file onto the window to
 open it. The in-app Help window (toolbar, or F1/`?`) lists the same
 shortcuts.
 
+### Plots
+
+The Plots manager (Ctrl/Cmd+P or `p`) creates any number of plots, each
+graphing one or more fields against time. Every configured plot is stacked in
+a resizable sidebar beneath the message list, so they update as you browse.
+Each plot can optionally overlay vertical lines at your marks — toggle "Show
+markers" in the plot editor. Zoom, pan and hover come from the plot widget
+itself.
+
 ## Building
 
 ```sh
