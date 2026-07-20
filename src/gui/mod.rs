@@ -23,10 +23,10 @@ const COLUMNS_SHORTCUT: KeyboardShortcut =
 const PLOTS_SHORTCUT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::P);
 const SETTINGS_SHORTCUT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Comma);
 const HELP_SHORTCUT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::F1);
-/// The modifier half of `add_requested` (the Filters/Columns windows also
-/// accept a plain `a`); consumed by whichever of them is open and checks first
-/// each frame — see `GuiApp::ui`'s fixed call order (filters, then columns)
-/// for the tie-break. Plots use their own `p` shortcut instead.
+/// The modifier half of `add_requested` (the Filters panel and Columns window
+/// also accept a plain `a`); consumed by whichever of them is open and checks
+/// first each frame — see `GuiApp::ui`'s fixed draw order (filters, then
+/// columns) for the tie-break. Plots use their own `p` shortcut instead.
 const ADD_SHORTCUT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::N);
 const MARK_BG: Color32 = Color32::from_rgb(140, 20, 20);
 
@@ -75,7 +75,7 @@ struct GuiApp {
     label_prompt: Option<usize>,
     /// Text in the label window.
     label_input: String,
-    /// Whether the Filters window is open.
+    /// Whether the Filters panel is open.
     filters_open: bool,
     filters_state: filters::FiltersState,
     /// Whether the Columns window is open.
@@ -128,6 +128,9 @@ fn add_requested(ctx: &egui::Context) -> bool {
 impl GuiApp {
     fn new(mut session: Option<Session>) -> Self {
         let status = session.as_mut().and_then(Session::load_setup);
+        // A loaded setup with filters silently hides messages; surface the
+        // panel so that's visible (without stealing focus from the list).
+        let filters_open = session.as_ref().is_some_and(|s| !s.filters.is_empty());
         Self {
             session,
             status,
@@ -139,7 +142,7 @@ impl GuiApp {
             settings_open: false,
             label_prompt: None,
             label_input: String::new(),
-            filters_open: false,
+            filters_open,
             filters_state: filters::FiltersState::default(),
             columns_open: false,
             columns_state: columns::ColumnsState::default(),
@@ -214,6 +217,10 @@ impl GuiApp {
         match crate::load_session(&path.to_string_lossy()) {
             Ok(mut session) => {
                 self.status = session.load_setup();
+                // Auto-open the filters panel when the setup carries filters, so
+                // hidden messages are visibly accounted for (see GuiApp::new).
+                self.filters_open = !session.filters.is_empty();
+                self.filters_state.cancel_editor();
                 self.session = Some(session);
                 self.error = None;
                 self.scroll_to_selected = true;
@@ -511,19 +518,17 @@ impl GuiApp {
         if !escaped {
             return;
         }
-        // The plots *sidebar* is intentionally absent here: it is a docked
-        // panel, itself in the background layer, so Tab moving between its own
-        // controls would read as "escaped" and bounce focus back every press.
-        // The plots *editor dialog* below is a floating window, so it is
-        // contained like the other popups.
+        // The plots sidebar and the filters panel are intentionally absent
+        // here: both are docked panels, themselves in the background layer, so
+        // Tab moving between their own controls would read as "escaped" and
+        // bounce focus back every press. The plots *editor dialog* below is a
+        // floating window, so it is contained like the other popups.
         if self.label_prompt.is_some() {
             self.label_focus = true;
         } else if self.plots_state.has_editor() {
             self.plots_state.grab_editor_focus();
         } else if self.columns_open {
             self.columns_state.grab_focus();
-        } else if self.filters_open {
-            self.filters_state.grab_focus();
         } else if self.settings_open {
             self.settings_focus = true;
         }
@@ -630,12 +635,12 @@ impl GuiApp {
                     ("Ctrl/Cmd+O or o", "Open a tlog file"),
                     ("Ctrl/Cmd+S or w", "Save the setup sidecar"),
                     ("Ctrl/Cmd+J or t", "Focus the jump-to-time box"),
-                    ("Ctrl/Cmd+F or f", "Toggle the Filters window"),
+                    ("Ctrl/Cmd+F or f", "Toggle the Filters panel"),
                     ("Ctrl/Cmd+Shift+C or c", "Toggle the Columns window"),
                     ("Ctrl/Cmd+P or p", "Add a new plot"),
                     ("Ctrl/Cmd+, or s", "Toggle Settings"),
                     ("F1 or ?", "Toggle this Help window"),
-                    ("Ctrl/Cmd+N or a", "Add a filter/column (in that window)"),
+                    ("Ctrl/Cmd+N or a", "Add a filter/column (in the Filters panel or Columns window)"),
                     ("Tab / Shift+Tab", "Move focus between a window's controls"),
                     ("Up / Down", "Move the selection"),
                     ("Page Up / Page Down", "Move the selection by a page"),
@@ -1010,6 +1015,13 @@ impl eframe::App for GuiApp {
             self.open_path(&path);
         }
 
+        // With no file open the filters panel can't be shown; drop any stale
+        // open/editor state so a later Esc isn't silently swallowed by it.
+        if self.session.is_none() {
+            self.filters_open = false;
+            self.filters_state.cancel_editor();
+        }
+
         // Modifier shortcuts must be consumed before the plain-letter checks
         // in handle_nav_keys so a Cmd-modified press can't also satisfy the
         // unmodified check for the same key (see handle_toolbar_shortcuts).
@@ -1026,12 +1038,13 @@ impl eframe::App for GuiApp {
 
         if self.session.is_some() {
             egui::Panel::right("detail").default_size(420.0).show(ui, |ui| {
-                // Both the marks list and the plots sidebar sit under the
-                // message contents view, in the same right column. Bottom
+                // The marks list, plots sidebar and filters panel all sit under
+                // the message contents view, in the same right column. Bottom
                 // panels are added outermost-first, so marks takes the very
-                // bottom and the plots block sits between the contents and the
-                // marks; the detail pane then fills the space above them. Each
-                // is shown only when it has content.
+                // bottom, then plots, then filters directly beneath the detail
+                // pane, which fills the space above them. Marks and plots are
+                // shown only when they have content; the filters panel is shown
+                // whenever it is open (it hosts Add, so it must open empty).
                 if self.session.as_ref().is_some_and(|s| !s.marks.is_empty()) {
                     egui::Panel::bottom("marks")
                         .resizable(true)
@@ -1048,6 +1061,21 @@ impl eframe::App for GuiApp {
                             }
                         });
                 }
+                if self.filters_open {
+                    egui::Panel::bottom("filters")
+                        .resizable(true)
+                        .default_size(200.0)
+                        .show(ui, |ui| {
+                            if let Some(session) = &mut self.session {
+                                filters::panel(
+                                    ui,
+                                    &mut self.filters_open,
+                                    session,
+                                    &mut self.filters_state,
+                                );
+                            }
+                        });
+                }
                 self.detail_panel(ui);
             });
         }
@@ -1057,13 +1085,6 @@ impl eframe::App for GuiApp {
         self.settings_window(&ctx);
         self.label_window(&ctx);
         self.help_window(&ctx);
-        if self.filters_open {
-            if let Some(session) = &mut self.session {
-                filters::show(&ctx, &mut self.filters_open, session, &mut self.filters_state);
-            } else {
-                self.filters_open = false;
-            }
-        }
         if self.columns_open {
             if let Some(session) = &mut self.session {
                 columns::show(&ctx, &mut self.columns_open, session, &mut self.columns_state);
