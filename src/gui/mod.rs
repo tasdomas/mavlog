@@ -837,7 +837,8 @@ impl GuiApp {
         }
     }
 
-    /// The side pane listing every mark in file order. Single-click selects
+    /// The pane listing every mark in file order, shown in the bottom of the
+    /// right column beneath the detail view. Single-click selects
     /// (without scrolling the list); double-click also scrolls the list to
     /// the row; right-click offers edit/remove, mirroring the table's menu.
     /// Only shown when at least one mark exists (see `GuiApp::ui`).
@@ -1000,13 +1001,16 @@ impl eframe::App for GuiApp {
 
         if self.session.is_some() {
             egui::Panel::right("detail").default_size(420.0).show(ui, |ui| {
+                // The marks list sits under the detail view, in the same
+                // right column. Added first so it reserves the bottom strip;
+                // the detail pane then fills the space above it.
+                if self.session.as_ref().is_some_and(|s| !s.marks.is_empty()) {
+                    egui::Panel::bottom("marks")
+                        .resizable(true)
+                        .default_size(220.0)
+                        .show(ui, |ui| self.marks_panel(ui));
+                }
                 self.detail_panel(ui);
-            });
-        }
-
-        if self.session.as_ref().is_some_and(|s| !s.marks.is_empty()) {
-            egui::Panel::left("marks").default_size(240.0).show(ui, |ui| {
-                self.marks_panel(ui);
             });
         }
 

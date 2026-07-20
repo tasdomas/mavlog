@@ -236,9 +236,10 @@ Done and committed (`532a76c`, `6e2895f`, `3289d77`, `afe38b1`):
   `session.marks` after `TableBuilder::body()` returns (kept the
   nested-closure borrows simple rather than mutating `Session` from inside
   them).
-- **Marks side pane** (`GuiApp::marks_panel`): a left `Panel` shown only when
-  `session.marks` is non-empty (adding the first mark reveals it, removing the
-  last hides it — no toolbar toggle). Lists every mark in file order
+- **Marks side pane** (`GuiApp::marks_panel`): a resizable bottom `Panel`
+  nested inside the right "detail" column (so it sits under the message-detail
+  view), shown only when `session.marks` is non-empty (adding the first mark
+  reveals it, removing the last hides it — no toolbar toggle). Lists every mark in file order
   (time/type + label) as `selectable_label` rows, highlighting the one that is
   the current selection. Single-click selects via `Session::select_entry`
   (which lands on the nearest visible message when the exact entry is filtered
