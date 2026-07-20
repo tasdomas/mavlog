@@ -42,10 +42,10 @@ inside them immediately:
 | Ctrl/Cmd+J or `t` | Focus the jump-to-time box |
 | Ctrl/Cmd+F or `f` | Toggle the Filters window |
 | Ctrl/Cmd+Shift+C or `c` | Toggle the Columns window |
-| Ctrl/Cmd+P or `p` | Toggle the Plots sidebar |
+| Ctrl/Cmd+P or `p` | Add a new plot |
 | Ctrl/Cmd+, or `s` | Toggle Settings |
 | F1 or `?` | Toggle the Help window |
-| Ctrl/Cmd+N or `a` | Add a filter/column/plot, in whichever of those is open |
+| Ctrl/Cmd+N or `a` | Add a filter/column, in whichever of those windows is open |
 | Tab / Shift+Tab | Move focus between controls (stays inside an open popup) |
 | Up / Down | Move the selection |
 | Page Up / Page Down | Move the selection by a page |
@@ -61,12 +61,12 @@ shortcuts.
 
 ### Plots
 
-The Plots sidebar (Ctrl/Cmd+P or `p`) is a collapsible right-hand panel that
-lists your plots, each graphing one or more fields against time. Create any
-number of them; tick a plot's **Show** box to open it in its own movable
-window, which updates as you browse. Each plot can optionally overlay vertical
-lines at your marks — toggle "Show markers" in the plot editor. Zoom, pan and
-hover come from the plot widget itself.
+Press Ctrl/Cmd+P or `p` (or the toolbar's **Add plot**) to open the plot
+dialog and define a plot — a name and one or more fields graphed against time.
+Configured plots are listed in a sidebar under the message list; tick a plot's
+**Show** box to open it in its own movable window, which updates as you browse.
+Each plot can optionally overlay vertical lines at your marks — toggle "Show
+markers" in the dialog. Zoom, pan and hover come from the plot widget itself.
 
 ## Building
 

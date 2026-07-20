@@ -1,7 +1,7 @@
-//! The Plots sidebar (a collapsible right panel that lists `Session::plots`
-//! with per-plot Show toggles plus create/edit/remove) and the rendering of
-//! each shown plot as its own floating `egui_plot::Plot` window — the
-//! motivating feature for the whole GUI.
+//! The Plots sidebar (a panel under the message list that lists
+//! `Session::plots` with per-plot Show toggles plus Edit/Remove/Add), the
+//! add/edit dialog, and the rendering of each shown plot as its own floating
+//! `egui_plot::Plot` window — the motivating feature for the whole GUI.
 
 use std::collections::{HashMap, HashSet};
 
@@ -33,14 +33,15 @@ struct PlotEditor {
     show_marks: bool,
 }
 
-/// State for the Plots sidebar and the open plot windows; owned by `GuiApp`.
+/// State for the Plots sidebar, the add/edit dialog and the open plot windows;
+/// owned by `GuiApp`.
 #[derive(Default)]
 pub struct PlotsState {
-    manager_open: bool,
-    /// Focus the sidebar's first button on the next frame, so keyboard
-    /// (Tab/Enter) navigation starts inside it when it is expanded.
-    focus_on_open: bool,
     editor: Option<PlotEditor>,
+    /// Focus the editor dialog's first field on the next frame, so keyboard
+    /// (Tab/Enter) navigation starts inside a freshly opened dialog and stays
+    /// contained when Tab would otherwise let it escape.
+    editor_focus: bool,
     error: Option<String>,
     /// Indices into `Session::plots` currently shown as their own windows.
     open: HashSet<usize>,
@@ -53,29 +54,15 @@ pub struct PlotsState {
 }
 
 impl PlotsState {
-    pub fn open_manager(&mut self) {
-        self.manager_open = true;
-        self.focus_on_open = true;
+    /// Open the dialog to add a new plot (the `p` / Plots-button shortcut).
+    pub fn add_plot(&mut self, session: &Session) {
+        self.editor = Some(editor_for(session, None));
+        self.editor_focus = true;
+        self.error = None;
     }
 
-    /// Whether the plots sidebar is expanded (used by the Esc-to-close audit).
-    pub fn is_manager_open(&self) -> bool {
-        self.manager_open
-    }
-
-    pub fn close_manager(&mut self) {
-        self.manager_open = false;
-    }
-
-    pub fn toggle_manager(&mut self) {
-        self.manager_open = !self.manager_open;
-        if self.manager_open {
-            self.focus_on_open = true;
-        }
-    }
-
-    /// Whether an "add"/"edit" plot editor is currently open (used by the
-    /// layered Esc handler: cancel the editor before closing the manager).
+    /// Whether the add/edit dialog is open (used by the Esc-to-close audit and
+    /// Tab containment).
     pub fn has_editor(&self) -> bool {
         self.editor.is_some()
     }
@@ -85,12 +72,21 @@ impl PlotsState {
         self.error = None;
     }
 
+    /// Ask the open editor dialog to re-grab keyboard focus (keeps Tab inside
+    /// it). No-op when the dialog is closed.
+    pub fn grab_editor_focus(&mut self) {
+        if self.editor.is_some() {
+            self.editor_focus = true;
+        }
+    }
+
     /// Discard cached points, open windows and any editor. Called when a new
     /// file is loaded, since these are all keyed by index into the old file's
     /// plots.
     pub fn reset(&mut self) {
         self.editor = None;
         self.error = None;
+        self.editor_focus = false;
         self.open.clear();
         self.cache.clear();
     }
@@ -145,17 +141,23 @@ fn editor_for(session: &Session, index: Option<usize>) -> PlotEditor {
     }
 }
 
-/// Render the Plots sidebar's contents into `ui` (the caller supplies the
-/// docked, collapsible panel): the plot list with per-plot Show toggles,
-/// Add/Edit/Remove, and the inline editor. Each shown plot draws in its own
-/// window via `show_open_plots`.
-pub fn show_manager(ui: &mut egui::Ui, session: &mut Session, state: &mut PlotsState) {
-    let ctx = ui.ctx().clone();
-    if state.editor.is_none() && super::add_requested(&ctx) {
-        state.editor = Some(editor_for(session, None));
-        state.error = None;
-    }
-    ui.heading("Plots");
+/// Render the Plots sidebar (the caller supplies the docked bottom panel) into
+/// `ui`: the plot list, each row with a Show toggle, Edit and Remove, plus an
+/// Add button. Shown by `GuiApp` whenever the session has any plots. The
+/// add/edit dialog is a separate window (`show_editor`); each shown plot draws
+/// in its own window (`show_open_plots`).
+pub fn show_sidebar(ui: &mut egui::Ui, session: &mut Session, state: &mut PlotsState) {
+    ui.horizontal(|ui| {
+        ui.heading("Plots");
+        let ctx = ui.ctx().clone();
+        if ui
+            .button("Add")
+            .on_hover_text(super::hint(&ctx, &super::PLOTS_SHORTCUT, "p"))
+            .clicked()
+        {
+            state.add_plot(session);
+        }
+    });
     ui.separator();
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
@@ -164,8 +166,6 @@ pub fn show_manager(ui: &mut egui::Ui, session: &mut Session, state: &mut PlotsS
             let mut edit = None;
             for (i, plot_def) in session.plots.iter().enumerate() {
                 ui.horizontal(|ui| {
-                    let series_summary = plot_def.series.len();
-                    ui.label(format!("{} ({series_summary} series)", plot_def.name));
                     let mut shown = state.open.contains(&i);
                     if ui.checkbox(&mut shown, "Show").clicked() {
                         if shown {
@@ -178,6 +178,8 @@ pub fn show_manager(ui: &mut egui::Ui, session: &mut Session, state: &mut PlotsS
                             state.open.remove(&i);
                         }
                     }
+                    let series_summary = plot_def.series.len();
+                    ui.label(format!("{} ({series_summary} series)", plot_def.name));
                     if ui.small_button("Edit").clicked() {
                         edit = Some(i);
                     }
@@ -204,41 +206,38 @@ pub fn show_manager(ui: &mut egui::Ui, session: &mut Session, state: &mut PlotsS
             }
             if let Some(i) = edit {
                 state.editor = Some(editor_for(session, Some(i)));
+                state.editor_focus = true;
                 state.error = None;
             }
+        });
+}
 
-            ui.separator();
-            ui.horizontal(|ui| {
-                if state.editor.is_none() {
-                    let add = ui
-                        .button("Add plot")
-                        .on_hover_text(super::hint(&ctx, &super::ADD_SHORTCUT, "a"));
-                    if state.focus_on_open {
-                        add.request_focus();
-                        state.focus_on_open = false;
-                    }
-                    if add.clicked() {
-                        state.editor = Some(editor_for(session, None));
-                        state.error = None;
-                    }
-                }
-                let collapse = ui.button("Collapse").on_hover_text("Esc");
-                if state.focus_on_open {
-                    collapse.request_focus();
-                    state.focus_on_open = false;
-                }
-                if collapse.clicked() {
-                    state.manager_open = false;
-                }
-            });
-
+/// Show the add/edit plot dialog while one is open (`PlotsState::add_plot` via
+/// the `p` shortcut, or the sidebar's Edit button): a floating window with the
+/// name, a "Show markers" toggle, the variable-length series list and
+/// Save/Cancel. Adding a plot also opens it.
+pub fn show_editor(ctx: &egui::Context, session: &mut Session, state: &mut PlotsState) {
+    if state.editor.is_none() {
+        return;
+    }
+    let editing = state.editor.as_ref().is_some_and(|e| e.index.is_some());
+    let title = if editing { "Edit plot" } else { "Add plot" };
+    let mut focus = std::mem::take(&mut state.editor_focus);
+    egui::Window::new(title)
+        .id(egui::Id::new("plot_editor"))
+        .collapsible(false)
+        .default_width(360.0)
+        .show(ctx, |ui| {
             let mut save = false;
             let mut cancel = false;
             if let Some(editor) = &mut state.editor {
-                ui.separator();
                 ui.horizontal(|ui| {
                     ui.label("Name:");
-                    ui.text_edit_singleline(&mut editor.name);
+                    let resp = ui.text_edit_singleline(&mut editor.name);
+                    if focus {
+                        resp.request_focus();
+                        focus = false;
+                    }
                 });
                 ui.checkbox(&mut editor.show_marks, "Show markers");
 
