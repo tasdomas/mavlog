@@ -23,10 +23,11 @@ const COLUMNS_SHORTCUT: KeyboardShortcut =
 const PLOTS_SHORTCUT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::P);
 const SETTINGS_SHORTCUT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Comma);
 const HELP_SHORTCUT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::F1);
-/// The modifier half of `add_requested` (the popups also accept a plain
-/// `a`); consumed by whichever of the Filters/Columns/Plots windows is open
-/// and checks first each frame — see `GuiApp::ui`'s fixed call order
-/// (filters, then columns, then plots) for the tie-break.
+/// The modifier half of `add_requested` (the editors also accept a plain
+/// `a`); consumed by whichever of the Plots sidebar / Filters / Columns
+/// editors is open and checks first each frame — see `GuiApp::ui`'s fixed
+/// order (the plots sidebar is a panel drawn before the Filters/Columns
+/// windows, so it checks first) for the tie-break.
 const ADD_SHORTCUT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::N);
 const MARK_BG: Color32 = Color32::from_rgb(140, 20, 20);
 
@@ -511,10 +512,13 @@ impl GuiApp {
         if !escaped {
             return;
         }
+        // The plots sidebar is intentionally absent here: it is a docked
+        // panel, itself in the background layer, so Tab moving between its own
+        // controls would read as "escaped" and bounce focus back to its entry
+        // button every press. Tab leaving a docked panel into the rest of the
+        // UI is normal, unlike a floating popup that must trap it.
         if self.label_prompt.is_some() {
             self.label_focus = true;
-        } else if self.plots_state.is_manager_open() {
-            self.plots_state.grab_focus();
         } else if self.columns_open {
             self.columns_state.grab_focus();
         } else if self.filters_open {
@@ -626,10 +630,10 @@ impl GuiApp {
                     ("Ctrl/Cmd+J or t", "Focus the jump-to-time box"),
                     ("Ctrl/Cmd+F or f", "Toggle the Filters window"),
                     ("Ctrl/Cmd+Shift+C or c", "Toggle the Columns window"),
-                    ("Ctrl/Cmd+P or p", "Toggle the Plots manager"),
+                    ("Ctrl/Cmd+P or p", "Toggle the Plots sidebar"),
                     ("Ctrl/Cmd+, or s", "Toggle Settings"),
                     ("F1 or ?", "Toggle this Help window"),
-                    ("Ctrl/Cmd+N or a", "Add a filter/column/plot (in that window)"),
+                    ("Ctrl/Cmd+N or a", "Add a filter/column/plot (in that editor)"),
                     ("Tab / Shift+Tab", "Move focus between a window's controls"),
                     ("Up / Down", "Move the selection"),
                     ("Page Up / Page Down", "Move the selection by a page"),
@@ -1002,6 +1006,20 @@ impl eframe::App for GuiApp {
         });
 
         if self.session.is_some() {
+            // The plots sidebar: a collapsible right panel listing the plots,
+            // with each shown plot drawn in its own window (below). Toggled by
+            // the Plots button / Ctrl-Cmd+P; when collapsed it takes no space.
+            // Added before the detail panel so it docks at the far right.
+            if self.plots_state.is_manager_open() {
+                egui::Panel::right("plots")
+                    .resizable(true)
+                    .default_size(300.0)
+                    .show(ui, |ui| {
+                        if let Some(session) = &mut self.session {
+                            plots::show_manager(ui, session, &mut self.plots_state);
+                        }
+                    });
+            }
             egui::Panel::right("detail").default_size(420.0).show(ui, |ui| {
                 // The marks list sits under the detail view, in the same
                 // right column. Added first so it reserves the bottom strip;
@@ -1035,9 +1053,8 @@ impl eframe::App for GuiApp {
                 self.columns_open = false;
             }
         }
-        if let Some(session) = &mut self.session {
-            plots::show_manager(&ctx, session, &mut self.plots_state);
-            plots::show_window(&ctx, session, &mut self.plots_state);
+        if let Some(session) = &self.session {
+            plots::show_open_plots(&ctx, session, &mut self.plots_state);
         }
 
         if let Some(message) = self.error.clone() {

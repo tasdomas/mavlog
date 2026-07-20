@@ -113,13 +113,15 @@ src/
                    Save/Cancel, mirrors the TUI's FilterEditor.
     columns.rs   — Columns window: list + editor (name/id/type/field) +
                    Save/Cancel, mirrors the TUI's ColumnEditor.
-    plots.rs     — "Manage plots" window (list/Edit/Remove/Add, variable-length
-                   series editor reusing searchable_combo, per-plot "Show
-                   markers" checkbox) + show_window: every configured plot
-                   rendered as an egui_plot::Plot, stacked in a separate
-                   floating "Plots" window. PlotsState::cache holds extracted
-                   points per plot (keyed by index into Session::plots) so they
-                   aren't re-decoded every frame; PlotsState::reset clears it
+    plots.rs     — Plots sidebar content (show_manager: plot list with per-plot
+                   Show toggle / Edit / Remove / Add + inline editor reusing
+                   searchable_combo, with a per-plot "Show markers" checkbox),
+                   rendered by GuiApp into a collapsible right Panel("plots")
+                   gated on PlotsState::is_manager_open. Each shown plot (the
+                   PlotsState::open set) draws in its own egui_plot::Plot window
+                   via show_open_plots. PlotsState::cache holds extracted points
+                   per plot (keyed by index into Session::plots) so they aren't
+                   re-decoded every frame; PlotsState::reset clears open+cache
                    when a new file is opened.
 ```
 
@@ -412,19 +414,25 @@ Not one of the original 5 phases; requested afterward (branch
 `feat/multiple-plots`). Supersedes the "each shown plot is its own
 `egui_plot::Plot` window" design in the Phase 4 notes above — read this over
 that where they conflict:
-- Plots are no longer one floating window each toggled by a per-plot "Show"
-  checkbox. **Every** configured plot is always rendered, stacked inside a
-  single separate floating "Plots" window (`gui/plots.rs::show_window`, shown
-  whenever `session.plots` is non-empty), each at a fixed `PLOT_HEIGHT` via
-  `render_plot`, the whole stack in a vertical `ScrollArea`. `show_window`
-  lazily fills `PlotsState::cache` (`.entry(i).or_insert_with(...)`). The
-  configuration window was retitled "Manage plots" so its egui id no longer
-  collides with the "Plots" display window. The `PlotsState::open: HashSet`
-  field is gone; the cache is unchanged in purpose (still keyed by index into
-  `Session::plots`, still the perf guard the Phase 4 note describes — don't
-  remove it). `PlotsState::reset()` clears it on file open.
-  (This briefly lived as a docked bottom `Panel` sidebar before being moved to
-  a separate window.)
+- Final layout (after a couple of intermediate iterations — a docked bottom
+  sidebar showing the plots themselves, then a single window holding all
+  plots): the **plot list** lives in a collapsible right-hand `Panel("plots")`
+  (`gui/plots.rs::show_manager`, now taking a `&mut Ui` instead of creating its
+  own `Window`; mounted in `GuiApp::ui` before the detail panel, gated on
+  `PlotsState::is_manager_open`, so when collapsed it takes no space). Each row
+  has a per-plot **Show** checkbox that adds/removes its index from
+  `PlotsState::open`; every open plot draws in **its own** `egui_plot::Plot`
+  window via `show_open_plots` (restored from the pre-sidebar design). The
+  `open: HashSet` and cache-on-show/save logic came back with it; `render_plot`
+  dropped its fixed `.height()` so each plot fills its window.
+- Two focus/shortcut wrinkles from the sidebar being a **docked panel** (not a
+  floating popup): (1) it is deliberately **omitted** from
+  `keep_focus_in_popups` — a `SidePanel` is itself in the background layer, so
+  the "Tab escaped to background, pull it back" rule would bounce focus back to
+  its entry button on every Tab; docked panels don't trap Tab. (2) It is drawn
+  in the panel phase, *before* the Filters/Columns windows, so it now checks
+  `add_requested` first — it wins the `a`/⌘N tie-break when several editors are
+  open at once (was: filters, then columns, then plots).
 - `PlotDef` gained `show_marks: bool` (`#[serde(default = "default_true")]`, so
   pre-existing sidecars load with marks on — same forward-compat trick as
   `Setup::plots`). The plot editor has a "Show markers" checkbox; `render_plot`
