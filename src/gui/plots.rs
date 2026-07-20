@@ -1,6 +1,6 @@
-//! The Plots manager window (create/edit/remove `Session::plots`) and the
-//! rendering of every configured plot, stacked in a sidebar beneath the
-//! message list — the motivating feature for the whole GUI.
+//! The "Manage plots" window (create/edit/remove `Session::plots`) and the
+//! rendering of every configured plot, stacked in a separate floating "Plots"
+//! window — the motivating feature for the whole GUI.
 
 use std::collections::HashMap;
 
@@ -154,7 +154,7 @@ pub fn show_manager(ctx: &egui::Context, session: &mut Session, state: &mut Plot
         state.editor = Some(editor_for(session, None));
         state.error = None;
     }
-    egui::Window::new("Plots")
+    egui::Window::new("Manage plots")
         .collapsible(false)
         .default_width(380.0)
         .show(ctx, |ui| {
@@ -354,24 +354,28 @@ pub fn show_manager(ctx: &egui::Context, session: &mut Session, state: &mut Plot
 /// vertically at this height and the whole sidebar scrolls when they overflow.
 const PLOT_HEIGHT: f32 = 220.0;
 
-/// Render the plots sidebar: every configured plot stacked vertically. Shown
-/// by `GuiApp` in a bottom panel beneath the message list.
-pub fn show_sidebar(ui: &mut egui::Ui, session: &Session, state: &mut PlotsState) {
+/// Show every configured plot stacked in a single floating "Plots" window.
+/// Shown whenever the session has at least one plot; does nothing otherwise.
+pub fn show_window(ctx: &egui::Context, session: &Session, state: &mut PlotsState) {
     if session.plots.is_empty() {
         return;
     }
-    egui::ScrollArea::vertical()
-        .auto_shrink([false, false])
-        .show(ui, |ui| {
-            for (i, plot_def) in session.plots.iter().enumerate() {
-                let points = state
-                    .cache
-                    .entry(i)
-                    .or_insert_with(|| PlotsState::extract(session, plot_def));
-                ui.strong(&plot_def.name);
-                render_plot(ui, session, plot_def, points, i);
-                ui.add_space(8.0);
-            }
+    egui::Window::new("Plots")
+        .default_size([560.0, 400.0])
+        .show(ctx, |ui| {
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    for (i, plot_def) in session.plots.iter().enumerate() {
+                        let points = state
+                            .cache
+                            .entry(i)
+                            .or_insert_with(|| PlotsState::extract(session, plot_def));
+                        ui.strong(&plot_def.name);
+                        render_plot(ui, session, plot_def, points, i);
+                        ui.add_space(8.0);
+                    }
+                });
         });
 }
 
