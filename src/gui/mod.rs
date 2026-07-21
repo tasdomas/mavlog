@@ -23,10 +23,9 @@ const COLUMNS_SHORTCUT: KeyboardShortcut =
 const PLOTS_SHORTCUT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::P);
 const SETTINGS_SHORTCUT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Comma);
 const HELP_SHORTCUT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::F1);
-/// The modifier half of `add_requested` (the Filters panel and Columns window
-/// also accept a plain `a`); consumed by whichever of them is open and checks
-/// first each frame — see `GuiApp::ui`'s fixed draw order (filters, then
-/// columns) for the tie-break. Plots use their own `p` shortcut instead.
+/// The modifier half of `add_requested` (the Columns window also accepts a
+/// plain `a`), consumed while that window is open. Filters open their add
+/// popup straight from the `f` shortcut, and plots use their own `p`.
 const ADD_SHORTCUT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::N);
 const MARK_BG: Color32 = Color32::from_rgb(140, 20, 20);
 
@@ -75,8 +74,6 @@ struct GuiApp {
     label_prompt: Option<usize>,
     /// Text in the label window.
     label_input: String,
-    /// Whether the Filters panel is open.
-    filters_open: bool,
     filters_state: filters::FiltersState,
     /// Whether the Columns window is open.
     columns_open: bool,
@@ -128,9 +125,6 @@ fn add_requested(ctx: &egui::Context) -> bool {
 impl GuiApp {
     fn new(mut session: Option<Session>) -> Self {
         let status = session.as_mut().and_then(Session::load_setup);
-        // A loaded setup with filters silently hides messages; surface the
-        // panel so that's visible (without stealing focus from the list).
-        let filters_open = session.as_ref().is_some_and(|s| !s.filters.is_empty());
         Self {
             session,
             status,
@@ -142,7 +136,6 @@ impl GuiApp {
             settings_open: false,
             label_prompt: None,
             label_input: String::new(),
-            filters_open,
             filters_state: filters::FiltersState::default(),
             columns_open: false,
             columns_state: columns::ColumnsState::default(),
@@ -156,20 +149,18 @@ impl GuiApp {
         }
     }
 
+    /// Open the add-filter popup (grabbing keyboard focus so Tab/Enter start
+    /// inside it). The side block listing filters shows itself based on
+    /// whether the session has any, so there is no panel to toggle.
+    fn open_new_filter(&mut self) {
+        let Some(session) = &self.session else {
+            return;
+        };
+        self.filters_state.open_add(session);
+    }
+
     /// Open (or toggle) a popup, letting it grab keyboard focus when it
     /// opens so Tab navigation starts inside it.
-    fn open_filters(&mut self) {
-        self.filters_open = true;
-        self.filters_state.grab_focus();
-    }
-
-    fn toggle_filters(&mut self) {
-        self.filters_open = !self.filters_open;
-        if self.filters_open {
-            self.filters_state.grab_focus();
-        }
-    }
-
     fn open_columns(&mut self) {
         self.columns_open = true;
         self.columns_state.grab_focus();
@@ -217,9 +208,6 @@ impl GuiApp {
         match crate::load_session(&path.to_string_lossy()) {
             Ok(mut session) => {
                 self.status = session.load_setup();
-                // Auto-open the filters panel when the setup carries filters, so
-                // hidden messages are visibly accounted for (see GuiApp::new).
-                self.filters_open = !session.filters.is_empty();
                 self.filters_state.cancel_editor();
                 self.session = Some(session);
                 self.error = None;
@@ -375,7 +363,7 @@ impl GuiApp {
             self.focus_jump = true;
         }
         if ctx.input_mut(|i| i.consume_shortcut(&FILTERS_SHORTCUT)) {
-            self.toggle_filters();
+            self.open_new_filter();
         }
         if ctx.input_mut(|i| i.consume_shortcut(&COLUMNS_SHORTCUT)) {
             self.toggle_columns();
@@ -413,7 +401,7 @@ impl GuiApp {
             self.focus_jump = true;
         }
         if ctx.input(|i| i.key_pressed(Key::F)) {
-            self.toggle_filters();
+            self.open_new_filter();
         }
         if ctx.input(|i| i.key_pressed(Key::C)) {
             self.toggle_columns();
@@ -484,10 +472,8 @@ impl GuiApp {
             self.help_open = false;
         } else if self.settings_open {
             self.settings_open = false;
-        } else if self.filters_open && self.filters_state.has_editor() {
+        } else if self.filters_state.has_editor() {
             self.filters_state.cancel_editor();
-        } else if self.filters_open {
-            self.filters_open = false;
         } else if self.columns_open && self.columns_state.has_editor() {
             self.columns_state.cancel_editor();
         } else if self.columns_open {
@@ -518,13 +504,16 @@ impl GuiApp {
         if !escaped {
             return;
         }
-        // The plots sidebar and the filters panel are intentionally absent
-        // here: both are docked panels, themselves in the background layer, so
-        // Tab moving between their own controls would read as "escaped" and
-        // bounce focus back every press. The plots *editor dialog* below is a
-        // floating window, so it is contained like the other popups.
+        // The plots sidebar and the filters side block are intentionally
+        // absent here: both are docked panels, themselves in the background
+        // layer, so Tab moving between their own controls would read as
+        // "escaped" and bounce focus back every press. The plots and filters
+        // *editor dialogs* below are floating windows, so they are contained
+        // like the other popups.
         if self.label_prompt.is_some() {
             self.label_focus = true;
+        } else if self.filters_state.has_editor() {
+            self.filters_state.grab_focus();
         } else if self.plots_state.has_editor() {
             self.plots_state.grab_editor_focus();
         } else if self.columns_open {
@@ -572,11 +561,11 @@ impl GuiApp {
                 }
                 ui.separator();
                 if ui
-                    .button("Filters")
+                    .button("Add filter")
                     .on_hover_text(hint(&ctx, &FILTERS_SHORTCUT, "f"))
                     .clicked()
                 {
-                    self.open_filters();
+                    self.open_new_filter();
                 }
                 if ui
                     .button("Columns")
@@ -635,12 +624,12 @@ impl GuiApp {
                     ("Ctrl/Cmd+O or o", "Open a tlog file"),
                     ("Ctrl/Cmd+S or w", "Save the setup sidecar"),
                     ("Ctrl/Cmd+J or t", "Focus the jump-to-time box"),
-                    ("Ctrl/Cmd+F or f", "Toggle the Filters panel"),
+                    ("Ctrl/Cmd+F or f", "Add a new filter"),
                     ("Ctrl/Cmd+Shift+C or c", "Toggle the Columns window"),
                     ("Ctrl/Cmd+P or p", "Add a new plot"),
                     ("Ctrl/Cmd+, or s", "Toggle Settings"),
                     ("F1 or ?", "Toggle this Help window"),
-                    ("Ctrl/Cmd+N or a", "Add a filter/column (in the Filters panel or Columns window)"),
+                    ("Ctrl/Cmd+N or a", "Add a column (in the Columns window)"),
                     ("Tab / Shift+Tab", "Move focus between a window's controls"),
                     ("Up / Down", "Move the selection"),
                     ("Page Up / Page Down", "Move the selection by a page"),
@@ -1015,10 +1004,9 @@ impl eframe::App for GuiApp {
             self.open_path(&path);
         }
 
-        // With no file open the filters panel can't be shown; drop any stale
-        // open/editor state so a later Esc isn't silently swallowed by it.
+        // With no file open the filters UI can't be shown; drop any stale
+        // editor so a later Esc isn't silently swallowed by it.
         if self.session.is_none() {
-            self.filters_open = false;
             self.filters_state.cancel_editor();
         }
 
@@ -1038,13 +1026,13 @@ impl eframe::App for GuiApp {
 
         if self.session.is_some() {
             egui::Panel::right("detail").default_size(420.0).show(ui, |ui| {
-                // The marks list, plots sidebar and filters panel all sit under
+                // The marks list, plots sidebar and filters block all sit under
                 // the message contents view, in the same right column. Bottom
                 // panels are added outermost-first, so marks takes the very
                 // bottom, then plots, then filters directly beneath the detail
-                // pane, which fills the space above them. Marks and plots are
-                // shown only when they have content; the filters panel is shown
-                // whenever it is open (it hosts Add, so it must open empty).
+                // pane, which fills the space above them. Each is shown only
+                // when it has content; the add/edit filter popup is a floating
+                // window (drawn below), so a filter can be added from empty.
                 if self.session.as_ref().is_some_and(|s| !s.marks.is_empty()) {
                     egui::Panel::bottom("marks")
                         .resizable(true)
@@ -1061,18 +1049,13 @@ impl eframe::App for GuiApp {
                             }
                         });
                 }
-                if self.filters_open {
+                if self.session.as_ref().is_some_and(|s| !s.filters.is_empty()) {
                     egui::Panel::bottom("filters")
                         .resizable(true)
                         .default_size(200.0)
                         .show(ui, |ui| {
                             if let Some(session) = &mut self.session {
-                                filters::panel(
-                                    ui,
-                                    &mut self.filters_open,
-                                    session,
-                                    &mut self.filters_state,
-                                );
+                                filters::panel(ui, session, &mut self.filters_state);
                             }
                         });
                 }
@@ -1093,6 +1076,7 @@ impl eframe::App for GuiApp {
             }
         }
         if let Some(session) = &mut self.session {
+            filters::show_editor(&ctx, session, &mut self.filters_state);
             plots::show_editor(&ctx, session, &mut self.plots_state);
             plots::show_open_plots(&ctx, session, &mut self.plots_state);
         }

@@ -1,4 +1,6 @@
-//! The Filters panel: view, toggle, add, edit and remove `Session::filters`.
+//! The Filters side block (lists `Session::filters`) plus the add/edit filter
+//! popup. The side block is shown whenever the session has any configured
+//! filters; the popup opens on demand to add or edit one.
 
 use eframe::egui;
 
@@ -20,19 +22,19 @@ pub struct FilterEditor {
     type_query: String,
 }
 
-/// State for the Filters panel; whether it is open is tracked by
-/// `GuiApp::filters_open`.
+/// State for the Filters UI: the optional add/edit popup. The side block's
+/// visibility is derived from `Session::filters`, so it needs no open flag.
 #[derive(Default)]
 pub struct FiltersState {
     editor: Option<FilterEditor>,
-    /// Focus the panel's first button on the next frame, so keyboard
-    /// (Tab/Enter) navigation starts inside a freshly opened panel.
+    /// Focus the popup's Save button on the next frame, so keyboard
+    /// (Tab/Enter) navigation starts inside a freshly opened popup.
     focus_on_open: bool,
 }
 
 impl FiltersState {
-    /// Whether an "add"/"edit" editor is currently open (used by the
-    /// layered Esc handler: cancel the editor before closing the panel).
+    /// Whether the add/edit popup is open (used by the layered Esc handler:
+    /// cancel the editor before closing anything else).
     pub fn has_editor(&self) -> bool {
         self.editor.is_some()
     }
@@ -41,19 +43,23 @@ impl FiltersState {
         self.editor = None;
     }
 
-    /// Ask the panel to grab keyboard focus when it is next shown.
+    /// Open the popup to add a new filter, and grab keyboard focus for it.
+    pub fn open_add(&mut self, session: &Session) {
+        self.editor = Some(editor_for(session, None));
+        self.focus_on_open = true;
+    }
+
+    /// Ask the popup to grab keyboard focus when it is next shown.
     pub fn grab_focus(&mut self) {
         self.focus_on_open = true;
     }
 }
 
-/// Body of the Filters bottom panel. `open` is cleared when the user clicks
-/// Close.
-pub fn panel(ui: &mut egui::Ui, open: &mut bool, session: &mut Session, state: &mut FiltersState) {
+/// Body of the Filters side block. Only shown when the session has at least
+/// one configured filter (see `GuiApp::ui`), so it never needs to bootstrap
+/// from empty — the toolbar/shortcut open the add popup for that.
+pub fn panel(ui: &mut egui::Ui, session: &mut Session, state: &mut FiltersState) {
     let ctx = ui.ctx().clone();
-    if state.editor.is_none() && super::add_requested(&ctx) {
-        state.editor = Some(editor_for(session, None));
-    }
 
     ui.heading("Filters");
     ui.label(format!(
@@ -102,74 +108,79 @@ pub fn panel(ui: &mut egui::Ui, open: &mut bool, session: &mut Session, state: &
     }
     if let Some(i) = edit {
         state.editor = Some(editor_for(session, Some(i)));
+        state.focus_on_open = true;
     }
 
     ui.separator();
-    ui.horizontal(|ui| {
-        if state.editor.is_none() {
-            let add = ui
-                .button("Add filter")
-                .on_hover_text(super::hint(&ctx, &super::ADD_SHORTCUT, "a"));
-            if state.focus_on_open {
-                add.request_focus();
-                state.focus_on_open = false;
-            }
-            if add.clicked() {
-                state.editor = Some(editor_for(session, None));
-            }
-        }
-        let close = ui.button("Close").on_hover_text("Esc");
-        if state.focus_on_open {
-            close.request_focus();
-            state.focus_on_open = false;
-        }
-        if close.clicked() {
-            *open = false;
-        }
-    });
+    if ui
+        .button("Add filter")
+        .on_hover_text(super::hint(&ctx, &super::FILTERS_SHORTCUT, "f"))
+        .clicked()
+    {
+        state.editor = Some(editor_for(session, None));
+        state.focus_on_open = true;
+    }
+}
+
+/// The add/edit filter popup, drawn as a floating window whenever an editor is
+/// open. Kept separate from the side block so a new filter can be added even
+/// when the block is hidden (no filters yet).
+pub fn show_editor(ctx: &egui::Context, session: &mut Session, state: &mut FiltersState) {
+    let Some(is_edit) = state.editor.as_ref().map(|e| e.index.is_some()) else {
+        return;
+    };
 
     let mut save = false;
     let mut cancel = false;
-    if let Some(editor) = &mut state.editor {
-        ui.separator();
-        ui.horizontal(|ui| {
-            ui.label("Id:");
-            let label = session.id_option_text(editor.id_choice);
-            if let Some(choice) = searchable_combo(
-                ui,
-                "filter_id",
-                &label,
-                &session.filter_dropdown_labels(0),
-                &mut editor.id_query,
-            ) {
-                editor.id_choice = choice;
-            }
+    egui::Window::new(if is_edit { "Edit filter" } else { "New filter" })
+        .collapsible(false)
+        .resizable(false)
+        .default_width(320.0)
+        .show(ctx, |ui| {
+            let editor = state.editor.as_mut().unwrap();
+            ui.horizontal(|ui| {
+                ui.label("Id:");
+                let label = session.id_option_text(editor.id_choice);
+                if let Some(choice) = searchable_combo(
+                    ui,
+                    "filter_id",
+                    &label,
+                    &session.filter_dropdown_labels(0),
+                    &mut editor.id_query,
+                ) {
+                    editor.id_choice = choice;
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label("Type:");
+                let label = session.type_option_text(editor.type_choice);
+                if let Some(choice) = searchable_combo(
+                    ui,
+                    "filter_type",
+                    &label,
+                    &session.filter_dropdown_labels(1),
+                    &mut editor.type_query,
+                ) {
+                    editor.type_choice = choice;
+                }
+            });
+            ui.separator();
+            ui.horizontal(|ui| {
+                let save_button = ui.button("Save").on_hover_text("Enter");
+                if state.focus_on_open {
+                    save_button.request_focus();
+                    state.focus_on_open = false;
+                }
+                if save_button.clicked() {
+                    save = true;
+                }
+                if ui.button("Cancel").on_hover_text("Esc").clicked() {
+                    cancel = true;
+                }
+            });
         });
-        ui.horizontal(|ui| {
-            ui.label("Type:");
-            let label = session.type_option_text(editor.type_choice);
-            if let Some(choice) = searchable_combo(
-                ui,
-                "filter_type",
-                &label,
-                &session.filter_dropdown_labels(1),
-                &mut editor.type_query,
-            ) {
-                editor.type_choice = choice;
-            }
-        });
-        ui.horizontal(|ui| {
-            if ui.button("Save").on_hover_text("Enter").clicked() {
-                save = true;
-            }
-            if ui.button("Cancel").on_hover_text("Esc").clicked() {
-                cancel = true;
-            }
-        });
-    }
-    if state.editor.is_some()
-        && ctx.input(|i| i.key_pressed(egui::Key::Enter))
-        && ctx.memory(|m| m.focused().is_none())
+
+    if !save && ctx.input(|i| i.key_pressed(egui::Key::Enter)) && ctx.memory(|m| m.focused().is_none())
     {
         save = true;
     }
