@@ -232,7 +232,9 @@ impl GuiApp {
     /// Show the native "open file" dialog and load the chosen file, if any.
     fn pick_and_open(&mut self) {
         if let Some(path) = rfd::FileDialog::new()
+            .add_filter("Log files", &["tlog", "bin"])
             .add_filter("MAVLink tlog", &["tlog"])
+            .add_filter("ArduPilot DataFlash", &["bin"])
             .pick_file()
         {
             self.request_open(path);
@@ -334,7 +336,7 @@ impl GuiApp {
         }
     }
 
-    /// Read, parse and load a tlog file, replacing the current session on
+    /// Read, parse and load a log file, replacing the current session on
     /// success or setting `self.error` on failure.
     fn open_path(&mut self, path: &std::path::Path) {
         match crate::load_session(&path.to_string_lossy()) {
@@ -756,7 +758,7 @@ impl GuiApp {
                 ui.label(egui::RichText::new("Keyboard shortcuts").strong());
                 ui.add_space(4.0);
                 for (keys, action) in [
-                    ("Ctrl/Cmd+O or o", "Open a tlog file"),
+                    ("Ctrl/Cmd+O or o", "Open a .tlog or .bin log file"),
                     ("Ctrl/Cmd+S or w", "Save the setup sidecar"),
                     ("Ctrl/Cmd+J or t", "Focus the jump-to-time box"),
                     ("Ctrl/Cmd+F or f", "Add a new filter"),
@@ -848,7 +850,7 @@ impl GuiApp {
         let Some(session) = &mut self.session else {
             ui.centered_and_justified(|ui| {
                 ui.vertical_centered(|ui| {
-                    ui.label("Open a .tlog file to begin, or drag one onto this window.");
+                    ui.label("Open a .tlog or .bin file to begin, or drag one onto this window.");
                 });
             });
             return;

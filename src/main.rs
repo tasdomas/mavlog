@@ -29,7 +29,7 @@ fn main() -> Result<()> {
 
     if use_tui {
         let session =
-            session.context("the terminal UI needs a file: mavlog -tui <file.tlog>")?;
+            session.context("the terminal UI needs a file: mavlog -tui <file.tlog|.bin>")?;
         tui::run(session)
     } else {
         gui::run(session)

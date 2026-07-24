@@ -1,8 +1,11 @@
 # mavlog
 
-A viewer for MAVLink `.tlog` files: a scrollable, filterable message list
-with a decoded detail pane, custom "last-seen value" columns, marks with
-labels, jump-to-time, and interactive plots.
+A viewer for MAVLink `.tlog` and ArduPilot DataFlash `.bin` logs: a
+scrollable, filterable message list with a decoded detail pane, custom
+"last-seen value" columns, marks with labels, jump-to-time, and interactive
+plots. The log format is chosen by file extension (with a content-sniff
+fallback); `.bin` fields, units and multipliers come from the log's own
+embedded `FMT`/`FMTU` schema, and times are shown relative to boot.
 
 Two frontends share one core:
 
@@ -20,6 +23,7 @@ Two frontends share one core:
 ```sh
 mavlog                  # GUI, empty — open a file from the toolbar or drag one in
 mavlog FILE.tlog        # GUI, with FILE.tlog already loaded
+mavlog FILE.bin         # GUI, with an ArduPilot DataFlash log loaded
 mavlog -tui FILE.tlog   # terminal UI (a file is required)
 ```
 
@@ -37,7 +41,7 @@ inside them immediately:
 
 | Keys | Action |
 | --- | --- |
-| Ctrl/Cmd+O or `o` | Open a tlog file |
+| Ctrl/Cmd+O or `o` | Open a `.tlog` or `.bin` log file |
 | Ctrl/Cmd+S or `w` | Save the setup sidecar |
 | Ctrl/Cmd+J or `t` | Focus the jump-to-time box |
 | Ctrl/Cmd+F or `f` | Add a new filter |
@@ -55,9 +59,9 @@ inside them immediately:
 | Esc | Release a text box's focus, then cancel an open editor, then close a window or panel |
 
 Hovering any toolbar button shows its shortcut. Click a row to select it;
-right-click for a mark context menu; drag a `.tlog` file onto the window to
-open it. The in-app Help window (toolbar, or F1/`?`) lists the same
-shortcuts.
+right-click for a mark context menu; drag a `.tlog` or `.bin` file onto the
+window to open it. The in-app Help window (toolbar, or F1/`?`) lists the
+same shortcuts.
 
 ### Filters
 
