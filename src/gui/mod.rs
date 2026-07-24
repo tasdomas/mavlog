@@ -14,7 +14,6 @@ use egui_extras::{Column, TableBuilder};
 
 use crate::core::session::Session;
 use crate::core::time::{format_datetime, format_offset, parse_jump, TimeFormat};
-use crate::tlog;
 
 const OPEN_SHORTCUT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::O);
 /// Ctrl+Q quit shortcut for non-macOS platforms. On macOS, Cmd+Q is owned by
@@ -1095,10 +1094,7 @@ impl GuiApp {
             body.push('\n');
         }
         body.push('\n');
-        body.push_str(&match tlog::decode(&session.data, entry) {
-            Some(msg) => format!("{msg:#?}"),
-            None => tlog::hex_dump(&session.data[entry.payload.clone()]),
-        });
+        body.push_str(&session.decode_detail(entry));
 
         egui::ScrollArea::both()
             .auto_shrink([false, false])

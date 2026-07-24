@@ -291,6 +291,25 @@ pub fn decode_fields(schema: &Schema, msg_type: u8, payload: &[u8]) -> Option<Va
     Some(Value::Object(map))
 }
 
+/// Render a record as `Label: value unit` lines in field order, for the
+/// detail pane. Returns `None` if the type is unknown.
+pub fn decode_detail(schema: &Schema, msg_type: u8, payload: &[u8]) -> Option<String> {
+    let fmt = schema.get(msg_type)?;
+    let mut out = String::new();
+    for f in &fmt.fields {
+        let Some(bytes) = payload.get(f.offset..f.offset + f.size) else {
+            break; // truncated record
+        };
+        let value = match decode_field(f.code, bytes, f.multiplier) {
+            Value::String(s) => s,
+            other => other.to_string(),
+        };
+        let unit = f.unit.as_deref().map(|u| format!(" {u}")).unwrap_or_default();
+        out.push_str(&format!("{}: {value}{unit}\n", f.label));
+    }
+    Some(out)
+}
+
 fn decode_field(code: u8, b: &[u8], mult: f64) -> Value {
     let i = |v: i64| int_value(v, mult);
     match code {

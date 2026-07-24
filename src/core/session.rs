@@ -184,6 +184,22 @@ impl Session {
         }
     }
 
+    /// The detail-pane body for an entry: the decoded message fields, or a hex
+    /// dump when the payload can't be decoded.
+    pub fn decode_detail(&self, entry: &LogEntry) -> String {
+        let hex = || tlog::hex_dump(&self.data[entry.payload.clone()]);
+        match entry.kind {
+            EntryKind::Mavlink { .. } => {
+                tlog::decode(&self.data, entry).map(|m| format!("{m:#?}")).unwrap_or_else(hex)
+            }
+            EntryKind::Dataflash { msg_type } => self
+                .schema
+                .as_ref()
+                .and_then(|s| dataflash::decode_detail(s, msg_type, &self.data[entry.payload.clone()]))
+                .unwrap_or_else(hex),
+        }
+    }
+
     /// The column's field value from the last matching message at or before
     /// the given entry.
     pub fn column_value(&self, col: &CustomColumn, entry_index: usize) -> String {

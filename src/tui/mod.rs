@@ -15,7 +15,6 @@ use crate::core::column::{parse_columns, CustomColumn};
 use crate::core::filter::{match_labels, parse_filters, FilterExpr};
 use crate::core::session::Session;
 use crate::core::time::{format_datetime, format_offset, parse_jump, TimeFormat};
-use crate::tlog;
 
 /// Run the terminal UI over a loaded session until the user quits.
 pub fn run(session: Session) -> Result<()> {
@@ -1307,10 +1306,7 @@ impl App {
             body.push('\n');
         }
         body.push('\n');
-        body.push_str(&match tlog::decode(&self.session.data, entry) {
-            Some(msg) => format!("{msg:#?}"),
-            None => tlog::hex_dump(&self.session.data[entry.payload.clone()]),
-        });
+        body.push_str(&self.session.decode_detail(entry));
         let lines: Vec<&str> = body.lines().collect();
 
         let inner_height = (area.height as usize).saturating_sub(2);
