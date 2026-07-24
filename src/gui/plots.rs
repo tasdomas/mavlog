@@ -174,17 +174,14 @@ fn editor_for(session: &Session, index: Option<usize>) -> PlotEditor {
 /// add/edit dialog is a separate window (`show_editor`); each shown plot draws
 /// in its own window (`show_open_plots`).
 pub fn show_sidebar(ui: &mut egui::Ui, session: &mut Session, state: &mut PlotsState) {
-    ui.horizontal(|ui| {
-        ui.heading("Plots");
-        let ctx = ui.ctx().clone();
-        if ui
-            .button("Add")
-            .on_hover_text(super::hint(&ctx, &super::PLOTS_SHORTCUT, "p"))
-            .clicked()
-        {
-            state.add_plot(session);
-        }
-    });
+    let ctx = ui.ctx().clone();
+    if ui
+        .button("Add plot")
+        .on_hover_text(super::hint(&ctx, &super::PLOTS_SHORTCUT, "p"))
+        .clicked()
+    {
+        state.add_plot(session);
+    }
     ui.separator();
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])

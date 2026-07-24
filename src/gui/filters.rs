@@ -61,7 +61,6 @@ impl FiltersState {
 pub fn panel(ui: &mut egui::Ui, session: &mut Session, state: &mut FiltersState) {
     let ctx = ui.ctx().clone();
 
-    ui.heading("Filters");
     ui.label(format!(
         "{} of {} messages shown",
         session.filtered.len(),

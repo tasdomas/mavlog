@@ -81,6 +81,13 @@ struct GuiApp {
     plots_state: plots::PlotsState,
     /// Whether the Help window is open.
     help_open: bool,
+    /// Which right-column blocks are collapsed to just their header. Each is
+    /// toggled by clicking that block's header, which stays visible while
+    /// collapsed so the block can be reopened. The message-contents detail
+    /// pane above them is never collapsible.
+    filters_collapsed: bool,
+    plots_collapsed: bool,
+    marks_collapsed: bool,
     /// Set by the jump-focus shortcut; the toolbar requests focus on the
     /// jump box next time it's drawn, then clears this.
     focus_jump: bool,
@@ -141,6 +148,9 @@ impl GuiApp {
             columns_state: columns::ColumnsState::default(),
             plots_state: plots::PlotsState::default(),
             help_open: false,
+            filters_collapsed: false,
+            plots_collapsed: false,
+            marks_collapsed: false,
             focus_jump: false,
             text_focused_last_frame: false,
             settings_focus: false,
@@ -651,6 +661,7 @@ impl GuiApp {
                 for (action, desc) in [
                     ("Click a row", "Select that message"),
                     ("Right-click a row", "Add/edit/remove its mark"),
+                    ("Click a side block's header", "Collapse or expand that block"),
                     ("Double-click a mark (side pane)", "Jump the list to that message"),
                     ("Right-click a mark (side pane)", "Edit label / remove mark"),
                     ("Drag a file onto the window", "Open it"),
@@ -865,7 +876,6 @@ impl GuiApp {
         let Some(session) = &self.session else {
             return;
         };
-        ui.heading("Marks");
         ui.separator();
 
         let mut marks: Vec<(usize, String)> = session
@@ -981,6 +991,21 @@ fn hint(ctx: &egui::Context, shortcut: &KeyboardShortcut, plain: &str) -> String
     format!("{} or {plain}", ctx.format_shortcut(shortcut))
 }
 
+/// Draw a docked right-column block's clickable header — a disclosure triangle
+/// plus its heading-sized title — and return whether it was clicked this frame
+/// (a request to toggle collapse). The header stays visible while the block is
+/// collapsed, so clicking it again reopens the block; `collapsed` only chooses
+/// which triangle to show.
+fn panel_header(ui: &mut egui::Ui, title: &str, collapsed: bool) -> bool {
+    let triangle = if collapsed { "▶" } else { "▼" };
+    ui.selectable_label(
+        false,
+        egui::RichText::new(format!("{triangle} {title}")).heading(),
+    )
+    .on_hover_text(if collapsed { "Expand" } else { "Collapse" })
+    .clicked()
+}
+
 /// Paint an optional flat background behind a cell, then run its contents.
 fn cell(
     row: &mut egui_extras::TableRow<'_, '_>,
@@ -1033,31 +1058,55 @@ impl eframe::App for GuiApp {
                 // pane, which fills the space above them. Each is shown only
                 // when it has content; the add/edit filter popup is a floating
                 // window (drawn below), so a filter can be added from empty.
+                //
+                // Each block can be collapsed to just its header by clicking it.
+                // A collapsed block drops its resizable body and hugs the header
+                // height (bottom panels with no default size size to content),
+                // so only the expanded blocks share the leftover space.
                 if self.session.as_ref().is_some_and(|s| !s.marks.is_empty()) {
-                    egui::Panel::bottom("marks")
-                        .resizable(true)
-                        .default_size(220.0)
-                        .show(ui, |ui| self.marks_panel(ui));
+                    let collapsed = self.marks_collapsed;
+                    let mut panel = egui::Panel::bottom("marks");
+                    if !collapsed {
+                        panel = panel.resizable(true).default_size(220.0);
+                    }
+                    let mut toggled = false;
+                    panel.show(ui, |ui| {
+                        toggled = panel_header(ui, "Marks", collapsed);
+                        if !collapsed {
+                            self.marks_panel(ui);
+                        }
+                    });
+                    self.marks_collapsed ^= toggled;
                 }
                 if self.session.as_ref().is_some_and(|s| !s.plots.is_empty()) {
-                    egui::Panel::bottom("plots")
-                        .resizable(true)
-                        .default_size(240.0)
-                        .show(ui, |ui| {
-                            if let Some(session) = &mut self.session {
-                                plots::show_sidebar(ui, session, &mut self.plots_state);
-                            }
-                        });
+                    let collapsed = self.plots_collapsed;
+                    let mut panel = egui::Panel::bottom("plots");
+                    if !collapsed {
+                        panel = panel.resizable(true).default_size(240.0);
+                    }
+                    let mut toggled = false;
+                    panel.show(ui, |ui| {
+                        toggled = panel_header(ui, "Plots", collapsed);
+                        if !collapsed && let Some(session) = &mut self.session {
+                            plots::show_sidebar(ui, session, &mut self.plots_state);
+                        }
+                    });
+                    self.plots_collapsed ^= toggled;
                 }
                 if self.session.as_ref().is_some_and(|s| !s.filters.is_empty()) {
-                    egui::Panel::bottom("filters")
-                        .resizable(true)
-                        .default_size(200.0)
-                        .show(ui, |ui| {
-                            if let Some(session) = &mut self.session {
-                                filters::panel(ui, session, &mut self.filters_state);
-                            }
-                        });
+                    let collapsed = self.filters_collapsed;
+                    let mut panel = egui::Panel::bottom("filters");
+                    if !collapsed {
+                        panel = panel.resizable(true).default_size(200.0);
+                    }
+                    let mut toggled = false;
+                    panel.show(ui, |ui| {
+                        toggled = panel_header(ui, "Filters", collapsed);
+                        if !collapsed && let Some(session) = &mut self.session {
+                            filters::panel(ui, session, &mut self.filters_state);
+                        }
+                    });
+                    self.filters_collapsed ^= toggled;
                 }
                 self.detail_panel(ui);
             });

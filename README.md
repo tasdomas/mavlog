@@ -71,6 +71,10 @@ enabled filter (or when none are enabled). Disabled filters are remembered in
 the saved setup, written with a leading `!` in the filter text (e.g.
 `!1:1 =HEARTBEAT`).
 
+The Filters, Plots and Marks blocks in the right column each collapse to just
+their header when you click it, freeing vertical space for the others; click the
+header again to expand. The message contents view above them is always shown.
+
 ### Plots
 
 Press Ctrl/Cmd+P or `p` (or the toolbar's **Add plot**) to open the plot
