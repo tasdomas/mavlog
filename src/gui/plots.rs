@@ -405,13 +405,18 @@ pub fn show_editor(ctx: &egui::Context, session: &mut Session, state: &mut Plots
                                 }
                                 None => (None, None),
                             };
+                            let msg_type = session.type_options[s.type_choice].clone();
+                            // Prefer a user-typed unit; otherwise borrow the
+                            // one the DataFlash schema records for the field.
+                            let unit = none_if_blank(s.unit)
+                                .or_else(|| session.field_unit(&msg_type, &s.field));
                             SeriesDef {
                                 sysid,
                                 compid,
-                                msg_type: session.type_options[s.type_choice].clone(),
+                                msg_type,
                                 field: s.field,
                                 name: none_if_blank(s.name),
-                                unit: none_if_blank(s.unit),
+                                unit,
                             }
                         })
                         .collect();

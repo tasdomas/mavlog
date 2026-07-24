@@ -57,6 +57,17 @@ impl Schema {
     pub fn get(&self, msg_type: u8) -> Option<&MsgFmt> {
         self.msgs.get(&msg_type)
     }
+
+    /// The unit label for a field, looked up by message and field name
+    /// (case-insensitive). `None` when unknown or the field has no unit.
+    pub fn field_unit(&self, msg_name: &str, field: &str) -> Option<String> {
+        let fmt = self.msgs.values().find(|m| m.name.eq_ignore_ascii_case(msg_name))?;
+        fmt.fields
+            .iter()
+            .find(|f| f.label.eq_ignore_ascii_case(field))?
+            .unit
+            .clone()
+    }
 }
 
 /// Byte width of a format code, or `None` if unrecognised.
@@ -458,6 +469,8 @@ mod tests {
         assert!((v["Alt"].as_f64().unwrap() - 12.34).abs() < 1e-9);
         let alt = schema.get(3).unwrap().field("Alt").unwrap();
         assert_eq!(alt.unit.as_deref(), Some("m"));
+        // Looked up by name (case-insensitive), as the plot editor does.
+        assert_eq!(schema.field_unit("baro", "alt").as_deref(), Some("m"));
     }
 
     #[test]

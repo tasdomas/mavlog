@@ -184,6 +184,12 @@ impl Session {
         }
     }
 
+    /// The unit label a DataFlash schema records for a field, if any. Used to
+    /// auto-fill a new plot series' unit. Always `None` for MAVLink logs.
+    pub fn field_unit(&self, msg_type: &str, field: &str) -> Option<String> {
+        self.schema.as_ref()?.field_unit(msg_type, field)
+    }
+
     /// The detail-pane body for an entry: the decoded message fields, or a hex
     /// dump when the payload can't be decoded.
     pub fn decode_detail(&self, entry: &LogEntry) -> String {
