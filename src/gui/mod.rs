@@ -3,6 +3,8 @@
 
 mod columns;
 mod filters;
+#[cfg(target_os = "macos")]
+mod macos;
 mod plots;
 mod widgets;
 
@@ -15,6 +17,11 @@ use crate::core::time::{format_datetime, format_offset, parse_jump, TimeFormat};
 use crate::tlog;
 
 const OPEN_SHORTCUT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::O);
+/// Ctrl+Q quit shortcut for non-macOS platforms. On macOS, Cmd+Q is owned by
+/// the application menu; `gui::macos` repoints that menu item at the window
+/// close request so it hits the same unsaved-changes guard, and egui never
+/// sees the key. Elsewhere there is no such menu, so we handle the key here.
+const QUIT_SHORTCUT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Q);
 const SAVE_SHORTCUT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::S);
 const JUMP_SHORTCUT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::J);
 const FILTERS_SHORTCUT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::F);
@@ -35,6 +42,13 @@ enum MarkAction {
     Add,
     Remove,
     EditLabel,
+}
+
+/// A destructive action deferred while the unsaved-changes prompt is up:
+/// replacing the current session with another file, or quitting.
+enum PendingAction {
+    Open(std::path::PathBuf),
+    Quit,
 }
 
 /// Launch the native GUI window. `session` may be None, in which case the
@@ -109,6 +123,16 @@ struct GuiApp {
     /// reacts to focus that *Tab* moved, never focus the user clicked
     /// somewhere on purpose.
     tab_pressed_last_frame: bool,
+    /// A file-open or quit awaiting the user's answer to the unsaved-changes
+    /// prompt. While set, the prompt is shown and normal key shortcuts pause.
+    pending: Option<PendingAction>,
+    /// Set once the user has approved quitting with unsaved changes, so the
+    /// re-issued close request is allowed through instead of re-prompting.
+    allow_close: bool,
+    /// macOS: whether the menu's Quit item has been repointed at the window
+    /// close request yet (done once, on the first frame the menu exists).
+    #[cfg(target_os = "macos")]
+    menu_quit_rerouted: bool,
 }
 
 /// Whether the currently focused widget (if any) is a text box. Used to gate
@@ -156,6 +180,10 @@ impl GuiApp {
             settings_focus: false,
             label_focus: false,
             tab_pressed_last_frame: false,
+            pending: None,
+            allow_close: false,
+            #[cfg(target_os = "macos")]
+            menu_quit_rerouted: false,
         }
     }
 
@@ -208,7 +236,102 @@ impl GuiApp {
             .add_filter("MAVLink tlog", &["tlog"])
             .pick_file()
         {
+            self.request_open(path);
+        }
+    }
+
+    /// Open `path`, but first guard the current session's unsaved changes: if
+    /// there are any, stash the request and let the prompt decide.
+    fn request_open(&mut self, path: std::path::PathBuf) {
+        if self.session.as_ref().is_some_and(Session::is_dirty) {
+            self.pending = Some(PendingAction::Open(path));
+        } else {
             self.open_path(&path);
+        }
+    }
+
+    /// Quit, guarding the current session's unsaved changes: if there are any,
+    /// raise the prompt; otherwise close the window straight away.
+    fn request_quit(&mut self, ctx: &egui::Context) {
+        if self.session.as_ref().is_some_and(Session::is_dirty) {
+            self.pending = Some(PendingAction::Quit);
+        } else {
+            self.allow_close = true;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+    }
+
+    /// Carry out the deferred action once the user has chosen to proceed
+    /// (either after saving or after discarding). Clears `pending`.
+    fn resolve_pending(&mut self, ctx: &egui::Context) {
+        match self.pending.take() {
+            Some(PendingAction::Open(path)) => self.open_path(&path),
+            Some(PendingAction::Quit) => {
+                // Approve the close and re-issue it; next frame's
+                // close_requested is let through by `allow_close`.
+                self.allow_close = true;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            None => {}
+        }
+    }
+
+    /// The unsaved-changes prompt shown before opening another file or quitting
+    /// while the setup has unsaved edits. Offers Save / Discard / Cancel.
+    fn unsaved_changes_dialog(&mut self, ctx: &egui::Context) {
+        let verb = match self.pending {
+            Some(PendingAction::Open(_)) => "opening another file",
+            Some(PendingAction::Quit) => "quitting",
+            None => return,
+        };
+
+        enum Choice {
+            Save,
+            Discard,
+            Cancel,
+        }
+        let mut choice = None;
+        egui::Window::new("Unsaved changes")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.label(format!(
+                    "You have unsaved changes to the setup.\nSave before {verb}?"
+                ));
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Save").clicked() {
+                        choice = Some(Choice::Save);
+                    }
+                    if ui.button("Discard").clicked() {
+                        choice = Some(Choice::Discard);
+                    }
+                    if ui.button("Cancel").clicked() {
+                        choice = Some(Choice::Cancel);
+                    }
+                });
+            });
+        // Esc is the safe (non-destructive) way out of the prompt.
+        if ctx.input(|i| i.key_pressed(Key::Escape)) {
+            choice = Some(Choice::Cancel);
+        }
+
+        match choice {
+            None => {}
+            Some(Choice::Cancel) => self.pending = None,
+            Some(Choice::Discard) => self.resolve_pending(ctx),
+            Some(Choice::Save) => {
+                self.save_setup();
+                // Proceed only if the save actually landed (session now clean);
+                // otherwise abort the action and leave the error in the status
+                // bar rather than silently losing the changes.
+                if self.session.as_ref().map_or(true, |s| !s.is_dirty()) {
+                    self.resolve_pending(ctx);
+                } else {
+                    self.pending = None;
+                }
+            }
         }
     }
 
@@ -346,7 +469,7 @@ impl GuiApp {
     /// Write the current setup to the sidecar, showing the outcome in the
     /// status bar.
     fn save_setup(&mut self) {
-        let Some(session) = &self.session else {
+        let Some(session) = &mut self.session else {
             return;
         };
         self.status = Some(match session.save_setup() {
@@ -363,6 +486,9 @@ impl GuiApp {
     /// press would also satisfy a later plain `f` check and double-toggle
     /// the same window shut immediately after opening it.
     fn handle_toolbar_shortcuts(&mut self, ctx: &egui::Context) {
+        if ctx.input_mut(|i| i.consume_shortcut(&QUIT_SHORTCUT)) {
+            self.request_quit(ctx);
+        }
         if ctx.input_mut(|i| i.consume_shortcut(&OPEN_SHORTCUT)) {
             self.pick_and_open();
         }
@@ -638,6 +764,7 @@ impl GuiApp {
                     ("Ctrl/Cmd+Shift+C or c", "Toggle the Columns window"),
                     ("Ctrl/Cmd+P or p", "Add a new plot"),
                     ("Ctrl/Cmd+, or s", "Toggle Settings"),
+                    ("Ctrl/Cmd+Q", "Quit (warns on unsaved changes)"),
                     ("F1 or ?", "Toggle this Help window"),
                     ("Ctrl/Cmd+N or a", "Add a column (in the Columns window)"),
                     ("Tab / Shift+Tab", "Move focus between a window's controls"),
@@ -1024,9 +1151,30 @@ impl eframe::App for GuiApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
 
+        // Route the macOS menu's Cmd+Q through the window close request so the
+        // unsaved-changes guard applies. The menu only exists once the app has
+        // finished launching, so keep trying until it takes.
+        #[cfg(target_os = "macos")]
+        if !self.menu_quit_rerouted {
+            self.menu_quit_rerouted = macos::reroute_menu_quit_to_close();
+        }
+
         let dropped = ctx.input(|i| i.raw.dropped_files.clone());
         if let Some(path) = dropped.iter().find_map(|f| f.path.clone()) {
-            self.open_path(&path);
+            self.request_open(path);
+        }
+
+        // Guard the window close against unsaved changes: cancel the close and
+        // raise the prompt. Once the user approves (or the setup is clean),
+        // `allow_close` lets the re-issued close through.
+        if ctx.input(|i| i.viewport().close_requested())
+            && !self.allow_close
+            && self.session.as_ref().is_some_and(Session::is_dirty)
+        {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            if self.pending.is_none() {
+                self.pending = Some(PendingAction::Quit);
+            }
         }
 
         // With no file open the filters UI can't be shown; drop any stale
@@ -1035,12 +1183,16 @@ impl eframe::App for GuiApp {
             self.filters_state.cancel_editor();
         }
 
-        // Modifier shortcuts must be consumed before the plain-letter checks
-        // in handle_nav_keys so a Cmd-modified press can't also satisfy the
-        // unmodified check for the same key (see handle_toolbar_shortcuts).
-        self.handle_toolbar_shortcuts(&ctx);
-        self.handle_nav_keys(&ctx);
-        self.handle_escape(&ctx);
+        // While the unsaved-changes prompt is up it owns the keyboard (Esc/
+        // buttons); pausing the normal shortcuts keeps them from acting behind
+        // it. Modifier shortcuts must be consumed before the plain-letter
+        // checks in handle_nav_keys so a Cmd-modified press can't also satisfy
+        // the unmodified check for the same key (see handle_toolbar_shortcuts).
+        if self.pending.is_none() {
+            self.handle_toolbar_shortcuts(&ctx);
+            self.handle_nav_keys(&ctx);
+            self.handle_escape(&ctx);
+        }
         self.keep_focus_in_popups(&ctx);
 
         egui::Panel::top("toolbar").show(ui, |ui| self.toolbar(ui));
@@ -1117,6 +1269,7 @@ impl eframe::App for GuiApp {
         self.settings_window(&ctx);
         self.label_window(&ctx);
         self.help_window(&ctx);
+        self.unsaved_changes_dialog(&ctx);
         if self.columns_open {
             if let Some(session) = &mut self.session {
                 columns::show(&ctx, &mut self.columns_open, session, &mut self.columns_state);

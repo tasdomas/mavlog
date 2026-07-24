@@ -3,8 +3,9 @@
 use chrono::{DateTime, NaiveDateTime, NaiveTime};
 
 /// How timestamps are shown in the message list and jump prompt.
-#[derive(Debug, PartialEq, Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Default, PartialEq, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub enum TimeFormat {
+    #[default]
     DateTime,
     OffsetSecs,
 }

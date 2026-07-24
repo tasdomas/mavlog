@@ -35,6 +35,10 @@ pub struct Session {
     pub selected: usize,
     /// Saved plot definitions (GUI-only; the TUI never reads this).
     pub plots: Vec<PlotDef>,
+    /// Snapshot of the setup as last saved to (or loaded from) the sidecar.
+    /// `is_dirty` compares the live setup against this to decide whether there
+    /// are unsaved changes worth warning about.
+    saved_setup: Setup,
 }
 
 impl Session {
@@ -63,6 +67,9 @@ impl Session {
             filter_text: String::new(),
             selected: 0,
             plots: Vec::new(),
+            // A freshly opened file with no edits equals the empty setup; if a
+            // sidecar exists, `load_setup` resets this baseline after applying.
+            saved_setup: Setup::default(),
         }
     }
 
@@ -241,21 +248,38 @@ impl Session {
         }
     }
 
-    /// Write the current state to the setup sidecar, returning the path on
-    /// success or a human-readable error.
-    pub fn save_setup(&self) -> Result<String, String> {
-        let setup = Setup {
+    /// The live setup as it would be written to the sidecar right now.
+    fn current_setup(&self) -> Setup {
+        Setup {
             time_format: self.time_format,
             filter: self.filter_text.clone(),
             marks: self.marks.iter().map(|(&i, l)| (i, l.clone())).collect(),
             selected: self.filtered.get(self.selected).copied().unwrap_or(0),
             columns: self.columns_text.clone(),
             plots: self.plots.clone(),
-        };
+        }
+    }
+
+    /// Whether the live setup differs from the last saved/loaded state, i.e.
+    /// there are unsaved changes. The selected message is ignored: moving the
+    /// cursor is navigation, not an edit worth warning about losing.
+    pub fn is_dirty(&self) -> bool {
+        let mut current = self.current_setup();
+        current.selected = self.saved_setup.selected;
+        current != self.saved_setup
+    }
+
+    /// Write the current state to the setup sidecar, returning the path on
+    /// success or a human-readable error.
+    pub fn save_setup(&mut self) -> Result<String, String> {
+        let setup = self.current_setup();
         let path = setup_path(&self.path);
         let json = serde_json::to_string_pretty(&setup).expect("setup serializes");
         match std::fs::write(&path, json) {
-            Ok(()) => Ok(path),
+            Ok(()) => {
+                self.saved_setup = setup;
+                Ok(path)
+            }
             Err(err) => Err(format!("Failed to save {path}: {err}")),
         }
     }
@@ -283,6 +307,10 @@ impl Session {
                 self.plots = setup.plots;
                 self.apply_filter();
                 self.select_entry(setup.selected);
+                // Baseline for `is_dirty`: the just-loaded state has no unsaved
+                // changes. Rebuilt from the applied fields so it matches their
+                // normalized form (trimmed filter, re-parsed columns).
+                self.saved_setup = self.current_setup();
                 Some(format!("Loaded setup from {path}"))
             }
             Err(err) => Some(format!("Failed to load {path}: {err}")),
@@ -426,6 +454,37 @@ mod tests {
         assert_eq!(restored.marks.get(&2).map(String::as_str), Some("mark2"));
         assert!(!restored.marks.contains_key(&999));
         assert_eq!(restored.selected_entry_index(), Some(2));
+
+        let _ = std::fs::remove_file(setup_path(&path));
+    }
+
+    #[test]
+    fn is_dirty_tracks_edits_and_saves() {
+        let path = std::env::temp_dir()
+            .join(format!("mavlog-dirty-{}.tlog", std::process::id()));
+        let path = path.to_str().unwrap().to_string();
+
+        // A freshly opened file with no edits is clean.
+        let mut s = session(&path);
+        assert!(!s.is_dirty());
+
+        // Moving the selection is navigation, not an edit worth warning about.
+        s.selected = 2;
+        assert!(!s.is_dirty());
+
+        // An actual edit (a mark) makes it dirty.
+        s.marks.insert(1, String::new());
+        assert!(s.is_dirty());
+
+        // Saving clears the dirty flag.
+        s.save_setup().unwrap();
+        assert!(!s.is_dirty());
+
+        // A further edit is dirty again; loading the saved setup restores clean.
+        s.marks.insert(2, "note".to_string());
+        assert!(s.is_dirty());
+        s.load_setup().unwrap();
+        assert!(!s.is_dirty());
 
         let _ = std::fs::remove_file(setup_path(&path));
     }

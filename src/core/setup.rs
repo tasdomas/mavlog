@@ -6,7 +6,7 @@ use crate::core::plot::PlotDef;
 use crate::core::time::TimeFormat;
 
 /// Persisted per-file state, stored as JSON next to the tlog.
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Setup {
     pub time_format: TimeFormat,
     pub filter: String,

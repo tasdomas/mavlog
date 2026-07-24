@@ -6,7 +6,7 @@ use crate::core::session::Session;
 use crate::tlog;
 
 /// A named plot: one or more series drawn together on the same axes.
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PlotDef {
     pub name: String,
     pub series: Vec<SeriesDef>,
@@ -23,7 +23,7 @@ fn default_true() -> bool {
 /// One series: values of `field` from messages matching `sysid:compid` (any
 /// side that is `None` matches anything) and `msg_type`, plotted against
 /// time.
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SeriesDef {
     pub sysid: Option<u8>,
     pub compid: Option<u8>,
