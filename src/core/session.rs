@@ -155,6 +155,14 @@ impl Session {
         self.columns = columns;
     }
 
+    /// Decode an entry's payload into a flat JSON object of `field -> value`.
+    /// The single place that knows how each log format turns bytes into named
+    /// fields, so columns, plots and field discovery stay format-neutral.
+    pub fn decode_fields(&self, entry: &LogEntry) -> Option<serde_json::Value> {
+        let msg = tlog::decode(&self.data, entry)?;
+        serde_json::to_value(&msg).ok()
+    }
+
     /// The column's field value from the last matching message at or before
     /// the given entry.
     pub fn column_value(&self, col: &CustomColumn, entry_index: usize) -> String {
@@ -162,10 +170,7 @@ impl Session {
         let Some(&source) = pos.checked_sub(1).map(|p| &col.matches[p]) else {
             return String::new(); // nothing seen yet
         };
-        let Some(msg) = tlog::decode(&self.data, &self.entries[source]) else {
-            return "?".to_string();
-        };
-        let Ok(value) = serde_json::to_value(&msg) else {
+        let Some(value) = self.decode_fields(&self.entries[source]) else {
             return "?".to_string();
         };
         let field = value
@@ -189,8 +194,7 @@ impl Session {
         self.entries
             .iter()
             .filter(|e| e.name == msg_type)
-            .find_map(|e| tlog::decode(&self.data, e))
-            .and_then(|msg| serde_json::to_value(&msg).ok())
+            .find_map(|e| self.decode_fields(e))
             .and_then(|value| {
                 value
                     .as_object()

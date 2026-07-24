@@ -3,7 +3,6 @@
 //! logic are pure and unit-testable like the rest of `core`.
 
 use crate::core::session::Session;
-use crate::tlog;
 
 /// A named plot: one or more series drawn together on the same axes.
 #[derive(Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -68,8 +67,7 @@ pub fn extract(session: &Session, series: &SeriesDef) -> SeriesData {
                 && e.name.eq_ignore_ascii_case(&series.msg_type)
         })
         .filter_map(|e| {
-            let msg = tlog::decode(&session.data, e)?;
-            let value = serde_json::to_value(&msg).ok()?;
+            let value = session.decode_fields(e)?;
             let field = value
                 .as_object()?
                 .iter()
@@ -206,6 +204,7 @@ fn decimate(points: Vec<[f64; 2]>) -> Vec<[f64; 2]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tlog;
 
     // v2 HEARTBEAT frames (msg id 0) differing only by sysid (byte index 4),
     // decoding to mavlink_version = 3 (see tlog::tests::decodes_payload_fields).
