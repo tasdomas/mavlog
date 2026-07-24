@@ -65,6 +65,32 @@ pub struct PlotsState {
     /// the user picks a path; consumed by `handle_export` when the rendered
     /// frame arrives as an `Event::Screenshot` (a frame or two later).
     pending_export: Option<PendingExport>,
+    /// Per-window size mode, keyed by index into `Session::plots`. Absent means
+    /// `WinSize::Normal`. Cycled by double-clicking a window's title bar.
+    window_size: HashMap<usize, WinSize>,
+}
+
+/// How a plot window is currently sized. Double-clicking the title bar cycles
+/// Normal → Maximized → Minimized → Normal.
+#[derive(Clone, Copy, Default, PartialEq)]
+enum WinSize {
+    /// Freely movable/resizable; egui remembers the user's size.
+    #[default]
+    Normal,
+    /// Pinned to fill the viewport.
+    Maximized,
+    /// Collapsed to just the title bar.
+    Minimized,
+}
+
+impl WinSize {
+    fn next(self) -> Self {
+        match self {
+            WinSize::Normal => WinSize::Maximized,
+            WinSize::Maximized => WinSize::Minimized,
+            WinSize::Minimized => WinSize::Normal,
+        }
+    }
 }
 
 /// A plot export the user has confirmed a path for, waiting on the frame
@@ -112,6 +138,7 @@ impl PlotsState {
         self.open.clear();
         self.cache.clear();
         self.pending_export = None;
+        self.window_size.clear();
     }
 
     fn extract(session: &Session, plot_def: &PlotDef) -> Vec<plot::SeriesData> {
@@ -425,6 +452,9 @@ pub fn show_open_plots(ctx: &egui::Context, session: &Session, state: &mut Plots
     // At most one export per frame; collected here and acted on after the loop
     // so the `&state.open` borrow is released before touching other state.
     let mut export_request: Option<(usize, egui::Rect)> = None;
+    // Title-bar double-clicks collected here and applied after the loop, since
+    // the loop holds `&state.open`.
+    let mut to_cycle: Vec<usize> = Vec::new();
     for &i in &state.open {
         let Some(plot_def) = session.plots.get(i) else {
             continue;
@@ -437,13 +467,62 @@ pub fn show_open_plots(ctx: &egui::Context, session: &Session, state: &mut Plots
             .or_insert_with(|| PlotsState::extract(session, plot_def));
         let mut still_open = true;
         let mut result = None;
-        egui::Window::new(&plot_def.name)
+        let size = state.window_size.get(&i).copied().unwrap_or_default();
+
+        // Minimize == collapse to the title bar. egui keeps the collapsed flag
+        // in its own CollapsingState (keyed off the window id); drive it from
+        // our size mode and store it before `show` so the two never disagree.
+        // We disable egui's built-in collapsible toggle below and own the
+        // gesture, so this is the only thing that flips it.
+        let collapse_id = egui::Id::new(("plot_window", i)).with("collapsing");
+        let mut collapsing =
+            egui::collapsing_header::CollapsingState::load_with_default_open(ctx, collapse_id, true);
+        collapsing.set_open(size != WinSize::Minimized);
+        collapsing.store(ctx);
+
+        let mut window = egui::Window::new(&plot_def.name)
             .id(egui::Id::new(("plot_window", i)))
-            .default_size([560.0, 360.0])
-            .open(&mut still_open)
-            .show(ctx, |ui| {
-                result = Some(render_plot(ui, session, plot_def, series_data, i));
+            // We cycle sizes on a title-bar double-click ourselves, so turn off
+            // egui's built-in double-click-to-collapse — it would fight us.
+            .collapsible(false)
+            .open(&mut still_open);
+        window = if size == WinSize::Maximized {
+            // Pin to fill the viewport. This uses its own window id so egui's
+            // fixed-size bookkeeping never overwrites the size the user gave the
+            // Normal window (which shares the id above with Minimized).
+            window
+                .id(egui::Id::new(("plot_window_max", i)))
+                .fixed_rect(ctx.content_rect().shrink(8.0))
+        } else {
+            window.default_size([560.0, 360.0])
+        };
+        let response = window.show(ctx, |ui| {
+            result = Some(render_plot(ui, session, plot_def, series_data, i));
+        });
+
+        // Cycle Normal → Maximized → Minimized on a double-click in the title
+        // bar. We read the raw double-click event and hit-test the title strip
+        // ourselves, because egui's internal title-bar widget consumes the
+        // click, so the window's own response never reports it.
+        if let Some(response) = response {
+            let win_rect = response.response.rect;
+            // The title strip: one interact row plus the frame's top margin, so
+            // the hit test stays within the title bar and clear of the toolbar
+            // row just below it.
+            let title_h = ctx.style_of(ctx.theme()).spacing.interact_size.y + 6.0;
+            let title_rect = egui::Rect::from_min_max(
+                win_rect.min,
+                egui::pos2(win_rect.max.x, win_rect.min.y + title_h),
+            );
+            let cycled = ctx.input(|i| {
+                i.pointer.button_double_clicked(egui::PointerButton::Primary)
+                    && i.pointer.interact_pos().is_some_and(|p| title_rect.contains(p))
             });
+            if cycled {
+                to_cycle.push(i);
+            }
+        }
+
         if !still_open {
             to_close.push(i);
         }
@@ -452,6 +531,10 @@ pub fn show_open_plots(ctx: &egui::Context, session: &Session, state: &mut Plots
         {
             export_request = Some((i, r.export_rect));
         }
+    }
+    for i in to_cycle {
+        let mode = state.window_size.entry(i).or_default();
+        *mode = mode.next();
     }
     for i in to_close {
         state.open.remove(&i);
