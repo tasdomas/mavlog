@@ -226,7 +226,7 @@ mod tests {
         let mut data = record(1_000_000, V2_HEARTBEAT_SYS1);
         data.extend(record(2_000_000, V2_HEARTBEAT_SYS2));
         let entries = tlog::parse(&data);
-        let session = Session::new("x".to_string(), data, entries);
+        let session = Session::new("x".to_string(), data, entries, None);
 
         let series = SeriesDef {
             sysid: Some(1),
@@ -243,7 +243,7 @@ mod tests {
     fn extract_skips_nonnumeric_fields() {
         let data = record(1_000_000, V2_HEARTBEAT_SYS1);
         let entries = tlog::parse(&data);
-        let session = Session::new("x".to_string(), data, entries);
+        let session = Session::new("x".to_string(), data, entries, None);
 
         // `mavtype` is an enum field, serializing as {"type": "..."}, not a
         // plain number — it should be skipped rather than coerced.

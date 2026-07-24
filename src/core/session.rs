@@ -4,12 +4,12 @@
 use std::collections::HashMap;
 
 use crate::core::column::{parse_columns, CustomColumn};
-use crate::core::entry::LogEntry;
+use crate::core::entry::{EntryKind, LogEntry};
 use crate::core::filter::{parse_filters, FilterExpr};
 use crate::core::plot::PlotDef;
 use crate::core::setup::{setup_path, Setup};
 use crate::core::time::{format_datetime, format_offset, TimeFormat};
-use crate::tlog;
+use crate::{dataflash, tlog};
 
 pub struct Session {
     pub path: String,
@@ -40,10 +40,18 @@ pub struct Session {
     /// `is_dirty` compares the live setup against this to decide whether there
     /// are unsaved changes worth warning about.
     saved_setup: Setup,
+    /// DataFlash message schema; `None` for MAVLink logs, which decode via the
+    /// `mavlink` dialect instead.
+    schema: Option<dataflash::Schema>,
 }
 
 impl Session {
-    pub fn new(path: String, data: Vec<u8>, entries: Vec<LogEntry>) -> Self {
+    pub fn new(
+        path: String,
+        data: Vec<u8>,
+        entries: Vec<LogEntry>,
+        schema: Option<dataflash::Schema>,
+    ) -> Self {
         // Formats without ids (DataFlash) contribute none; the dropdowns then
         // just offer "any".
         let mut id_options: Vec<(u8, u8)> =
@@ -65,7 +73,13 @@ impl Session {
             columns_text: String::new(),
             path,
             data,
-            time_format: TimeFormat::DateTime,
+            // DataFlash timestamps are microseconds since boot, not wall clock,
+            // so absolute dates would be meaningless — default to relative time.
+            time_format: if schema.is_some() {
+                TimeFormat::OffsetSecs
+            } else {
+                TimeFormat::DateTime
+            },
             filters: Vec::new(),
             filter_text: String::new(),
             selected: 0,
@@ -73,6 +87,7 @@ impl Session {
             // A freshly opened file with no edits equals the empty setup; if a
             // sidecar exists, `load_setup` resets this baseline after applying.
             saved_setup: Setup::default(),
+            schema,
         }
     }
 
@@ -159,8 +174,14 @@ impl Session {
     /// The single place that knows how each log format turns bytes into named
     /// fields, so columns, plots and field discovery stay format-neutral.
     pub fn decode_fields(&self, entry: &LogEntry) -> Option<serde_json::Value> {
-        let msg = tlog::decode(&self.data, entry)?;
-        serde_json::to_value(&msg).ok()
+        match entry.kind {
+            EntryKind::Mavlink { .. } => {
+                serde_json::to_value(tlog::decode(&self.data, entry)?).ok()
+            }
+            EntryKind::Dataflash { msg_type } => {
+                dataflash::decode_fields(self.schema.as_ref()?, msg_type, &self.data[entry.payload.clone()])
+            }
+        }
     }
 
     /// The column's field value from the last matching message at or before
@@ -348,7 +369,7 @@ mod tests {
             entry(3_000_000, 2, "HEARTBEAT"),
             entry(4_000_000, 1, "VFR_HUD"),
         ];
-        Session::new(path.to_string(), Vec::new(), entries)
+        Session::new(path.to_string(), Vec::new(), entries, None)
     }
 
     #[test]

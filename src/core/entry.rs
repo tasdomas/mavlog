@@ -29,8 +29,6 @@ pub enum EntryKind {
     Mavlink { msg_id: u32, version: MavlinkVersion },
     /// A DataFlash record; decoded via the log's embedded `FMT` schema, keyed
     /// by this message type id.
-    // Constructed once the DataFlash parser is wired into `load_session`.
-    #[allow(dead_code)]
     Dataflash { msg_type: u8 },
 }
 
