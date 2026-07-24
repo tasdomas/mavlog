@@ -68,7 +68,8 @@ fn is_dataflash(path: &str, data: &[u8]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::is_dataflash;
+    use super::{is_dataflash, load_session};
+    use crate::core::time::TimeFormat;
 
     #[test]
     fn autodetects_format() {
@@ -79,5 +80,51 @@ mod tests {
         // Otherwise sniff the DataFlash magic.
         assert!(is_dataflash("mystery", &[0xA3, 0x95, 0x80]));
         assert!(!is_dataflash("mystery", &[0xFD, 9, 0]));
+    }
+
+    #[test]
+    fn loads_a_dataflash_file_end_to_end() {
+        // A minimal .bin: FMT-of-FMT, a GPS FMT, and one GPS record.
+        let rec = |t: u8, body: &[u8]| {
+            let mut r = vec![0xA3, 0x95, t];
+            r.extend_from_slice(body);
+            r
+        };
+        let fixed = |s: &str, w: usize| {
+            let mut v = s.as_bytes().to_vec();
+            v.resize(w, 0);
+            v
+        };
+        let fmt = |t: u8, len: u8, name: &str, format: &str, labels: &str| {
+            let mut b = vec![t, len];
+            b.extend(fixed(name, 4));
+            b.extend(fixed(format, 16));
+            b.extend(fixed(labels, 64));
+            b
+        };
+
+        let mut data = rec(0x80, &fmt(0x80, 89, "FMT", "BBnNZ", "Type,Length,Name,Format,Columns"));
+        data.extend(rec(0x80, &fmt(2, 20, "GPS", "QBLf", "TimeUS,Status,Lat,Alt")));
+        let mut gps = 1_000_000u64.to_le_bytes().to_vec();
+        gps.push(3);
+        gps.extend((-350_000_000i32).to_le_bytes());
+        gps.extend(12.5f32.to_le_bytes());
+        data.extend(rec(2, &gps));
+
+        let path = std::env::temp_dir().join(format!("mavlog-e2e-{}.bin", std::process::id()));
+        std::fs::write(&path, &data).unwrap();
+        let session = load_session(path.to_str().unwrap()).unwrap();
+        let _ = std::fs::remove_file(&path);
+
+        // Detected as DataFlash: relative time, no ids, GPS type present.
+        assert_eq!(session.time_format, TimeFormat::OffsetSecs);
+        assert!(session.id_options.is_empty());
+        assert!(session.type_options.iter().any(|t| t == "GPS"));
+
+        let gps_entry = session.entries.iter().find(|e| e.name == "GPS").unwrap();
+        assert_eq!(gps_entry.timestamp_us, 1_000_000);
+        let v = session.decode_fields(gps_entry).unwrap();
+        assert!((v["Lat"].as_f64().unwrap() - (-35.0)).abs() < 1e-9);
+        assert!((v["Alt"].as_f64().unwrap() - 12.5).abs() < 1e-6);
     }
 }
