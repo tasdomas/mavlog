@@ -1,7 +1,7 @@
 //! Message filtering: expressions matched against log entries, plus the
 //! shared dropdown label matcher.
 
-use crate::tlog;
+use crate::core::entry::LogEntry;
 
 /// One filter expression; every part that is present must match. A message
 /// is shown if any expression matches it.
@@ -18,9 +18,9 @@ pub struct FilterExpr {
 }
 
 impl FilterExpr {
-    pub fn matches(&self, entry: &tlog::LogEntry) -> bool {
-        self.sysid.is_none_or(|s| s == entry.sysid)
-            && self.compid.is_none_or(|c| c == entry.compid)
+    pub fn matches(&self, entry: &LogEntry) -> bool {
+        self.sysid.is_none_or(|s| Some(s) == entry.sysid)
+            && self.compid.is_none_or(|c| Some(c) == entry.compid)
             && self.name.as_deref().is_none_or(|p| {
                 if self.exact {
                     entry.name.eq_ignore_ascii_case(p)
@@ -161,15 +161,15 @@ pub fn name_matches(pattern: &str, name: &str) -> bool {
 mod tests {
     use super::*;
 
-    fn entry(sysid: u8, compid: u8, name: &str) -> tlog::LogEntry {
-        tlog::LogEntry {
+    fn entry(sysid: u8, compid: u8, name: &str) -> LogEntry {
+        use crate::core::entry::EntryKind;
+        LogEntry {
             timestamp_us: 0,
-            sysid,
-            compid,
-            msg_id: 0,
-            version: mavlink::MavlinkVersion::V2,
+            sysid: Some(sysid),
+            compid: Some(compid),
             payload: 0..0,
             name: name.to_string(),
+            kind: EntryKind::Mavlink { msg_id: 0, version: mavlink::MavlinkVersion::V2 },
         }
     }
 
@@ -237,7 +237,7 @@ mod tests {
     #[test]
     fn filter_expressions_match() {
         let exprs = parse_filters("1:1 HEART, GPS*STATUS, 255").unwrap();
-        let matches = |e: &tlog::LogEntry| exprs.iter().any(|f| f.matches(e));
+        let matches = |e: &LogEntry| exprs.iter().any(|f| f.matches(e));
 
         assert!(matches(&entry(1, 1, "HEARTBEAT")));
         assert!(!matches(&entry(2, 1, "HEARTBEAT")));

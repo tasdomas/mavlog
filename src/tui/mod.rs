@@ -1237,7 +1237,7 @@ impl App {
                 let mut cells = vec![
                     format!("{entry_index:>7}"),
                     self.session.format_list_time(entry.timestamp_us),
-                    format!("{:>3}:{:<3}", entry.sysid, entry.compid),
+                    format!("{:>7}", entry.id_label()),
                     entry.name.clone(),
                 ];
                 cells.extend(
@@ -1308,8 +1308,8 @@ impl App {
         }
         body.push('\n');
         body.push_str(&match tlog::decode(&self.session.data, entry) {
-            Ok(msg) => format!("{msg:#?}"),
-            Err(_) => tlog::hex_dump(&self.session.data[entry.payload.clone()]),
+            Some(msg) => format!("{msg:#?}"),
+            None => tlog::hex_dump(&self.session.data[entry.payload.clone()]),
         });
         let lines: Vec<&str> = body.lines().collect();
 
@@ -1318,7 +1318,7 @@ impl App {
             .detail_scroll
             .min(lines.len().saturating_sub(inner_height));
 
-        let title = format!(" {} (id {}) ", entry.name, entry.msg_id);
+        let title = format!(" {} (id {}) ", entry.name, entry.msg_id());
         let mut block = self
             .pane_block(Focus::Detail)
             .title(Line::styled(title, Style::new().add_modifier(Modifier::BOLD)));

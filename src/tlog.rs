@@ -3,25 +3,20 @@
 
 use std::ops::Range;
 
-use mavlink::{dialects::ardupilotmega::MavMessage, error::ParserError, MavlinkVersion, Message};
+use mavlink::{dialects::ardupilotmega::MavMessage, MavlinkVersion, Message};
+
+use crate::core::entry::{EntryKind, LogEntry};
 
 pub const MAGIC_V1: u8 = 0xFE;
 pub const MAGIC_V2: u8 = 0xFD;
 
-pub struct LogEntry {
-    pub timestamp_us: u64,
-    pub sysid: u8,
-    pub compid: u8,
-    pub msg_id: u32,
-    pub version: MavlinkVersion,
-    /// Byte range of the payload within the log buffer.
-    pub payload: Range<usize>,
-    pub name: String,
-}
-
-/// Decode the full message for an entry parsed from `data`.
-pub fn decode(data: &[u8], entry: &LogEntry) -> Result<MavMessage, ParserError> {
-    MavMessage::parse(entry.version, entry.msg_id, &data[entry.payload.clone()])
+/// Decode the full MAVLink message for an entry parsed from `data`. Returns
+/// `None` for non-MAVLink entries or payloads the dialect can't parse.
+pub fn decode(data: &[u8], entry: &LogEntry) -> Option<MavMessage> {
+    let EntryKind::Mavlink { msg_id, version } = entry.kind else {
+        return None;
+    };
+    MavMessage::parse(version, msg_id, &data[entry.payload.clone()]).ok()
 }
 
 /// Fallback detail-pane body for messages the dialect can't decode.
@@ -114,12 +109,11 @@ fn entry(
     };
     LogEntry {
         timestamp_us: 0,
-        sysid,
-        compid,
-        msg_id,
-        version,
+        sysid: Some(sysid),
+        compid: Some(compid),
         payload,
         name,
+        kind: EntryKind::Mavlink { msg_id, version },
     }
 }
 
@@ -152,14 +146,14 @@ mod tests {
         assert_eq!(entries[0].name, "HEARTBEAT");
         assert_eq!(entries[1].timestamp_us, 2_000_000);
         assert_eq!(entries[1].name, "HEARTBEAT");
-        assert_eq!(entries[1].sysid, 1);
+        assert_eq!(entries[1].sysid, Some(1));
     }
 
     #[test]
     fn decodes_payload_fields() {
         let data = record(1_000_000, V2_HEARTBEAT);
         let entries = parse(&data);
-        let msg = decode(&data, &entries[0]).unwrap();
+        let msg = decode(&data, &entries[0]).expect("decodes");
         let MavMessage::HEARTBEAT(hb) = msg else {
             panic!("expected HEARTBEAT, got {msg:?}");
         };

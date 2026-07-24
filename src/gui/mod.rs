@@ -929,7 +929,7 @@ impl GuiApp {
                         ui.label(session.format_list_time(entry.timestamp_us));
                     });
                     cell(&mut row, mark_bg, |ui| {
-                        ui.label(format!("{}:{}", entry.sysid, entry.compid));
+                        ui.label(entry.id_label());
                     });
                     cell(&mut row, mark_bg, |ui| {
                         ui.label(&entry.name);
@@ -1080,7 +1080,7 @@ impl GuiApp {
         };
         let entry = &session.entries[entry_index];
         ui.label(
-            egui::RichText::new(format!("{} (id {})", entry.name, entry.msg_id)).strong(),
+            egui::RichText::new(format!("{} (id {})", entry.name, entry.msg_id())).strong(),
         );
         let mut body = format!(
             "Time: {}  ({})\n",
@@ -1096,8 +1096,8 @@ impl GuiApp {
         }
         body.push('\n');
         body.push_str(&match tlog::decode(&session.data, entry) {
-            Ok(msg) => format!("{msg:#?}"),
-            Err(_) => tlog::hex_dump(&session.data[entry.payload.clone()]),
+            Some(msg) => format!("{msg:#?}"),
+            None => tlog::hex_dump(&session.data[entry.payload.clone()]),
         });
 
         egui::ScrollArea::both()

@@ -2,6 +2,7 @@
 //! here may depend on ratatui, crossterm or egui.
 
 pub mod column;
+pub mod entry;
 pub mod filter;
 pub mod plot;
 pub mod session;

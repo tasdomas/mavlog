@@ -4,6 +4,7 @@
 use std::collections::HashMap;
 
 use crate::core::column::{parse_columns, CustomColumn};
+use crate::core::entry::LogEntry;
 use crate::core::filter::{parse_filters, FilterExpr};
 use crate::core::plot::PlotDef;
 use crate::core::setup::{setup_path, Setup};
@@ -13,7 +14,7 @@ use crate::tlog;
 pub struct Session {
     pub path: String,
     pub data: Vec<u8>,
-    pub entries: Vec<tlog::LogEntry>,
+    pub entries: Vec<LogEntry>,
     /// Timestamp of the first message; offsets are relative to it.
     pub start_us: u64,
     pub time_format: TimeFormat,
@@ -42,9 +43,11 @@ pub struct Session {
 }
 
 impl Session {
-    pub fn new(path: String, data: Vec<u8>, entries: Vec<tlog::LogEntry>) -> Self {
+    pub fn new(path: String, data: Vec<u8>, entries: Vec<LogEntry>) -> Self {
+        // Formats without ids (DataFlash) contribute none; the dropdowns then
+        // just offer "any".
         let mut id_options: Vec<(u8, u8)> =
-            entries.iter().map(|e| (e.sysid, e.compid)).collect();
+            entries.iter().filter_map(|e| e.sysid.zip(e.compid)).collect();
         id_options.sort_unstable();
         id_options.dedup();
         let mut type_options: Vec<String> = entries.iter().map(|e| e.name.clone()).collect();
@@ -137,8 +140,8 @@ impl Session {
                 .iter()
                 .enumerate()
                 .filter(|(_, e)| {
-                    col.sysid.is_none_or(|s| s == e.sysid)
-                        && col.compid.is_none_or(|c| c == e.compid)
+                    col.sysid.is_none_or(|s| Some(s) == e.sysid)
+                        && col.compid.is_none_or(|c| Some(c) == e.compid)
                         && e.name.eq_ignore_ascii_case(&col.msg_type)
                 })
                 .map(|(i, _)| i)
@@ -159,7 +162,7 @@ impl Session {
         let Some(&source) = pos.checked_sub(1).map(|p| &col.matches[p]) else {
             return String::new(); // nothing seen yet
         };
-        let Ok(msg) = tlog::decode(&self.data, &self.entries[source]) else {
+        let Some(msg) = tlog::decode(&self.data, &self.entries[source]) else {
             return "?".to_string();
         };
         let Ok(value) = serde_json::to_value(&msg) else {
@@ -186,7 +189,7 @@ impl Session {
         self.entries
             .iter()
             .filter(|e| e.name == msg_type)
-            .find_map(|e| tlog::decode(&self.data, e).ok())
+            .find_map(|e| tlog::decode(&self.data, e))
             .and_then(|msg| serde_json::to_value(&msg).ok())
             .and_then(|value| {
                 value
@@ -321,17 +324,16 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tlog::LogEntry;
+    use crate::core::entry::{EntryKind, LogEntry};
 
     fn entry(ts_us: u64, sysid: u8, name: &str) -> LogEntry {
         LogEntry {
             timestamp_us: ts_us,
-            sysid,
-            compid: 1,
-            msg_id: 0,
-            version: mavlink::MavlinkVersion::V2,
+            sysid: Some(sysid),
+            compid: Some(1),
             payload: 0..0,
             name: name.to_string(),
+            kind: EntryKind::Mavlink { msg_id: 0, version: mavlink::MavlinkVersion::V2 },
         }
     }
 

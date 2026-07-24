@@ -63,12 +63,12 @@ pub fn extract(session: &Session, series: &SeriesDef) -> SeriesData {
         .entries
         .iter()
         .filter(|e| {
-            series.sysid.is_none_or(|s| s == e.sysid)
-                && series.compid.is_none_or(|c| c == e.compid)
+            series.sysid.is_none_or(|s| Some(s) == e.sysid)
+                && series.compid.is_none_or(|c| Some(c) == e.compid)
                 && e.name.eq_ignore_ascii_case(&series.msg_type)
         })
         .filter_map(|e| {
-            let msg = tlog::decode(&session.data, e).ok()?;
+            let msg = tlog::decode(&session.data, e)?;
             let value = serde_json::to_value(&msg).ok()?;
             let field = value
                 .as_object()?
