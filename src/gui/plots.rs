@@ -602,6 +602,10 @@ fn render_plot(
                 .legend(Legend::default())
                 .allow_boxed_zoom(true)
                 .allow_double_click_reset(true)
+                // egui_plot's default scroll behavior pans (translates) the
+                // bounds, so the wheel just slid the plot around. Turn that off
+                // and remap the wheel to zoom-around-cursor in the closure below.
+                .allow_scroll(false)
                 .x_axis_formatter(move |mark, _range| fmt_time(mark.value, time_format, start_us))
                 .label_formatter(move |pos| match pos {
                     HoverPosition::NearDataPoint { plot_name, position, .. } => {
@@ -657,6 +661,16 @@ fn render_plot(
             let response = plot.show(ui, |plot_ui| {
                 if reset {
                     plot_ui.set_auto_bounds(true);
+                }
+                // Wheel zoom around the cursor (scroll-to-pan is disabled
+                // above). Scroll up zooms in, down zooms out; the exp() keeps
+                // each step multiplicative so zooming feels symmetric.
+                if plot_ui.response().hovered() {
+                    let scroll = plot_ui.ctx().input(|i| i.smooth_scroll_delta.y);
+                    if scroll != 0.0 {
+                        let zoom = (scroll * 0.005).exp();
+                        plot_ui.zoom_bounds_around_hovered(egui::Vec2::splat(zoom));
+                    }
                 }
                 for (row, (series, data)) in
                     plot_def.series.iter().zip(series_data).enumerate()
