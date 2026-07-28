@@ -846,7 +846,7 @@ impl GuiApp {
                 ui.label(egui::RichText::new("Keyboard shortcuts").strong());
                 ui.add_space(4.0);
                 for (keys, action) in [
-                    ("Ctrl/Cmd+O or o", "Open a .tlog or .bin log file"),
+                    ("Ctrl/Cmd+O or o", "Open a .tlog, .bin, or .mavses session"),
                     ("Ctrl/Cmd+S or w", "Save the setup sidecar"),
                     ("Ctrl/Cmd+J or t", "Focus the jump-to-time box"),
                     ("Ctrl/Cmd+F or f", "Add a new filter"),

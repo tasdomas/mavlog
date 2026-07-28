@@ -21,16 +21,31 @@ Two frontends share one core:
 ## Usage
 
 ```sh
-mavlog                  # GUI, empty — open a file from the toolbar or drag one in
-mavlog FILE.tlog        # GUI, with FILE.tlog already loaded
-mavlog FILE.bin         # GUI, with an ArduPilot DataFlash log loaded
-mavlog -tui FILE.tlog   # terminal UI (a file is required)
+mavlog                     # GUI, empty — open a file from the toolbar or drag one in
+mavlog FILE.tlog           # GUI, with FILE.tlog already loaded
+mavlog FILE.bin            # GUI, with an ArduPilot DataFlash log loaded
+mavlog FILE.tlog FILE.bin  # merge a tlog + bin into one synchronized session
+mavlog SESSION.mavses      # reopen a saved merged session
+mavlog -tui FILE.tlog      # terminal UI (a file is required)
 ```
 
 Any per-file state you save (filters, columns, marks, time format, plots) is
 written to a `FILE.tlog.mavlog.json` sidecar next to the log. It round-trips
 between the GUI and the TUI — a setup saved in one loads correctly in the
 other.
+
+### Merging a tlog and a bin
+
+A telemetry `.tlog` and the matching onboard `.bin` can be loaded into one
+session and viewed on a single timeline — pass both on the command line, or
+use **Add log…** in the GUI. The bin's boot-relative `TimeUS` is aligned onto
+the tlog's absolute clock using the tlog's `SYSTEM_TIME` messages; if those are
+missing, or to fine-tune, nudge the offset in **Settings**. Merged entries show
+a source tag (`tlog`/`bin`), and filters, custom columns and plot series can be
+scoped to one source with a `@tlog` / `@bin` qualifier (or the editor's Source
+dropdown) — so you can, for example, plot the tlog's GPS altitude against the
+bin's `BARO.Alt`. Save the whole thing (both file names, the offset and all
+settings) with **Save session…** to a `.mavses` file, and reopen it later.
 
 ### GUI keyboard shortcuts
 

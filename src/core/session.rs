@@ -114,6 +114,7 @@ impl Session {
     /// decoding is unchanged — payload ranges just index further in), the bin's
     /// boot-relative timestamps are shifted by `bin_offset_us` onto the tlog's
     /// absolute unix axis, and the combined entries are stable-sorted by time.
+    #[allow(clippy::too_many_arguments)] // the parsed pieces of two logs
     pub fn merge(
         primary_path: String,
         secondary_path: String,
@@ -197,7 +198,7 @@ impl Session {
     /// A short format tag (`tlog`/`bin`) for a `source`, for the compact list
     /// column. `None` for a single-file session.
     pub fn source_tag(&self, source: LogSourceId) -> Option<&'static str> {
-        self.is_merged().then(|| match source {
+        self.is_merged().then_some(match source {
             LogSourceId::Primary => "tlog",
             LogSourceId::Secondary => "bin",
         })
