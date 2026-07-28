@@ -30,6 +30,8 @@ struct SeriesEditor {
     name: String,
     /// Optional measurement unit; series sharing a unit share a Y axis.
     unit: String,
+    /// 0 = any, 1 = primary (tlog), 2 = secondary (bin). Only used when merged.
+    source_choice: usize,
     id_query: String,
     type_query: String,
     field_query: String,
@@ -153,6 +155,7 @@ fn empty_series() -> SeriesEditor {
         field: String::new(),
         name: String::new(),
         unit: String::new(),
+        source_choice: 0,
         id_query: String::new(),
         type_query: String::new(),
         field_query: String::new(),
@@ -180,6 +183,7 @@ fn editor_for(session: &Session, index: Option<usize>) -> PlotEditor {
                     field: s.field.clone(),
                     name: s.name.clone().unwrap_or_default(),
                     unit: s.unit.clone().unwrap_or_default(),
+                    source_choice: crate::gui::widgets::source_choice(s.source),
                     id_query: String::new(),
                     type_query: String::new(),
                     field_query: String::new(),
@@ -355,6 +359,12 @@ pub fn show_editor(ctx: &egui::Context, session: &mut Session, state: &mut Plots
                                     .desired_width(70.0)
                                     .hint_text("e.g. m/s"),
                             );
+                            crate::gui::widgets::source_combo(
+                                ui,
+                                &format!("plot_series_source_{row}"),
+                                session,
+                                &mut series.source_choice,
+                            );
                         });
                     });
                 }
@@ -417,6 +427,7 @@ pub fn show_editor(ctx: &egui::Context, session: &mut Session, state: &mut Plots
                                 field: s.field,
                                 name: none_if_blank(s.name),
                                 unit,
+                                source: crate::gui::widgets::source_from_choice(s.source_choice),
                             }
                         })
                         .collect();

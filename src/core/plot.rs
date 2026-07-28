@@ -2,6 +2,7 @@
 //! plotting needs a graphical canvas — but the data model and extraction
 //! logic are pure and unit-testable like the rest of `core`.
 
+use crate::core::entry::LogSourceId;
 use crate::core::session::Session;
 
 /// A named plot: one or more series drawn together on the same axes.
@@ -37,6 +38,10 @@ pub struct SeriesDef {
     /// style). Defaulted so older sidecars still load.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unit: Option<String>,
+    /// Restrict to one log of a merged session. `None` matches either.
+    /// Defaulted so single-log sidecars still load.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<LogSourceId>,
 }
 
 /// Above this many extracted points, a series is min/max-bucket decimated so
@@ -62,7 +67,8 @@ pub fn extract(session: &Session, series: &SeriesDef) -> SeriesData {
         .entries
         .iter()
         .filter(|e| {
-            series.sysid.is_none_or(|s| Some(s) == e.sysid)
+            series.source.is_none_or(|s| s == e.source)
+                && series.sysid.is_none_or(|s| Some(s) == e.sysid)
                 && series.compid.is_none_or(|c| Some(c) == e.compid)
                 && e.name.eq_ignore_ascii_case(&series.msg_type)
         })
@@ -235,6 +241,7 @@ mod tests {
             field: "mavlink_version".to_string(),
             name: None,
             unit: None,
+            source: None,
         };
         assert_eq!(extract(&session, &series).points, vec![[1_000_000.0, 3.0]]);
     }
@@ -254,6 +261,7 @@ mod tests {
             field: "mavtype".to_string(),
             name: None,
             unit: None,
+            source: None,
         };
         assert!(extract(&session, &series).points.is_empty());
     }
@@ -289,6 +297,7 @@ mod tests {
             field: "f".to_string(),
             name: None,
             unit: unit.map(str::to_string),
+            source: None,
         }
     }
 

@@ -28,7 +28,7 @@ pub struct LogEntry {
 /// Identifies which of a merged session's two logs an entry came from. Used to
 /// disambiguate overlapping message-type names (both formats have `GPS`, `ATT`,
 /// …) in the list and in source-scoped filters/columns/plots.
-#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug, serde::Serialize, serde::Deserialize)]
 pub enum LogSourceId {
     #[default]
     Primary,
