@@ -20,6 +20,24 @@ pub struct LogEntry {
     pub payload: Range<usize>,
     pub name: String,
     pub kind: EntryKind,
+    /// Which log a merged session drew this entry from. Always `Primary` for
+    /// single-file sessions; a merge tags the second log's entries `Secondary`.
+    // Read by the merge, the source column and source-scoped matching (added
+    // in following commits).
+    #[allow(dead_code)]
+    pub source: LogSourceId,
+}
+
+/// Identifies which of a merged session's two logs an entry came from. Used to
+/// disambiguate overlapping message-type names (both formats have `GPS`, `ATT`,
+/// …) in the list and in source-scoped filters/columns/plots.
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
+pub enum LogSourceId {
+    #[default]
+    Primary,
+    // Constructed by `Session::merge` (added in a following commit).
+    #[allow(dead_code)]
+    Secondary,
 }
 
 /// Format-specific data needed to decode an entry's payload.

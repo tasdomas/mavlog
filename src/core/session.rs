@@ -371,7 +371,7 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::entry::{EntryKind, LogEntry};
+    use crate::core::entry::{EntryKind, LogEntry, LogSourceId};
 
     fn entry(ts_us: u64, sysid: u8, name: &str) -> LogEntry {
         LogEntry {
@@ -381,6 +381,7 @@ mod tests {
             payload: 0..0,
             name: name.to_string(),
             kind: EntryKind::Mavlink { msg_id: 0, version: mavlink::MavlinkVersion::V2 },
+            source: LogSourceId::Primary,
         }
     }
 

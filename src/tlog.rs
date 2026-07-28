@@ -5,7 +5,7 @@ use std::ops::Range;
 
 use mavlink::{dialects::ardupilotmega::MavMessage, MavlinkVersion, Message};
 
-use crate::core::entry::{EntryKind, LogEntry};
+use crate::core::entry::{EntryKind, LogEntry, LogSourceId};
 
 pub const MAGIC_V1: u8 = 0xFE;
 pub const MAGIC_V2: u8 = 0xFD;
@@ -114,6 +114,7 @@ fn entry(
         payload,
         name,
         kind: EntryKind::Mavlink { msg_id, version },
+        source: LogSourceId::Primary,
     }
 }
 

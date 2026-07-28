@@ -162,7 +162,7 @@ mod tests {
     use super::*;
 
     fn entry(sysid: u8, compid: u8, name: &str) -> LogEntry {
-        use crate::core::entry::EntryKind;
+        use crate::core::entry::{EntryKind, LogSourceId};
         LogEntry {
             timestamp_us: 0,
             sysid: Some(sysid),
@@ -170,6 +170,7 @@ mod tests {
             payload: 0..0,
             name: name.to_string(),
             kind: EntryKind::Mavlink { msg_id: 0, version: mavlink::MavlinkVersion::V2 },
+            source: LogSourceId::Primary,
         }
     }
 

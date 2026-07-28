@@ -11,7 +11,7 @@ use std::collections::HashMap;
 
 use serde_json::{Map, Value};
 
-use crate::core::entry::{EntryKind, LogEntry};
+use crate::core::entry::{EntryKind, LogEntry, LogSourceId};
 
 const HEAD1: u8 = 0xA3;
 const HEAD2: u8 = 0x95;
@@ -131,6 +131,7 @@ pub fn parse(data: &[u8]) -> (Vec<LogEntry>, Schema) {
                 payload: pos + 3..pos + FMT_LEN,
                 name: "FMT".to_string(),
                 kind: EntryKind::Dataflash { msg_type },
+                source: LogSourceId::Primary,
             });
             pos += FMT_LEN;
             continue;
@@ -182,6 +183,7 @@ pub fn parse(data: &[u8]) -> (Vec<LogEntry>, Schema) {
             payload: pos + 3..pos + length,
             name: fmt.name.clone(),
             kind: EntryKind::Dataflash { msg_type },
+            source: LogSourceId::Primary,
         });
         pos += length;
     }
