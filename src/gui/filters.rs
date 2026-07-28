@@ -6,7 +6,7 @@ use eframe::egui;
 
 use crate::core::filter::FilterExpr;
 use crate::core::session::Session;
-use crate::gui::widgets::searchable_combo;
+use crate::gui::widgets::{searchable_combo, source_choice, source_combo};
 
 /// Open editor for a single filter expression (dropdown-based, like the TUI's
 /// FilterEditor): pick an id (any, or a sysid:compid pair) and/or a type (any,
@@ -18,6 +18,8 @@ pub struct FilterEditor {
     id_choice: usize,
     /// 0 = any, otherwise 1 + index into `Session::type_options`.
     type_choice: usize,
+    /// 0 = any, 1 = primary (tlog), 2 = secondary (bin). Only used when merged.
+    source_choice: usize,
     id_query: String,
     type_query: String,
 }
@@ -163,6 +165,7 @@ pub fn show_editor(ctx: &egui::Context, session: &mut Session, state: &mut Filte
                     editor.type_choice = choice;
                 }
             });
+            source_combo(ui, "filter_source", session, &mut editor.source_choice);
             ui.separator();
             ui.horizontal(|ui| {
                 let save_button = ui.button("Save").on_hover_text("Enter");
@@ -207,6 +210,7 @@ pub fn show_editor(ctx: &egui::Context, session: &mut Session, state: &mut Filte
             compid,
             name,
             exact: true,
+            source: crate::gui::widgets::source_from_choice(editor.source_choice),
             enabled,
         };
         match editor.index {
@@ -234,6 +238,7 @@ fn editor_for(session: &Session, index: Option<usize>) -> FilterEditor {
         index,
         id_choice,
         type_choice,
+        source_choice: source_choice(expr.and_then(|e| e.source)),
         id_query: String::new(),
         type_query: String::new(),
     }

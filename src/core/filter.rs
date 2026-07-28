@@ -1,7 +1,7 @@
 //! Message filtering: expressions matched against log entries, plus the
 //! shared dropdown label matcher.
 
-use crate::core::entry::LogEntry;
+use crate::core::entry::{LogEntry, LogSourceId};
 
 /// One filter expression; every part that is present must match. A message
 /// is shown if any expression matches it.
@@ -12,14 +12,34 @@ pub struct FilterExpr {
     pub name: Option<String>,
     /// Match the type name exactly instead of substring/glob.
     pub exact: bool,
+    /// Restrict to one log of a merged session. `None` matches either.
+    pub source: Option<LogSourceId>,
     /// Disabled expressions are kept and persisted (with a '!' text prefix)
     /// but do not participate in filtering.
     pub enabled: bool,
 }
 
+/// Text token for a source qualifier (`@tlog` / `@bin`); also the label used in
+/// merged-session editors. Primary is always the tlog, Secondary the bin.
+pub fn source_token(source: LogSourceId) -> &'static str {
+    match source {
+        LogSourceId::Primary => "tlog",
+        LogSourceId::Secondary => "bin",
+    }
+}
+
+fn parse_source_token(s: &str) -> Option<LogSourceId> {
+    match s.to_ascii_lowercase().as_str() {
+        "tlog" => Some(LogSourceId::Primary),
+        "bin" => Some(LogSourceId::Secondary),
+        _ => None,
+    }
+}
+
 impl FilterExpr {
     pub fn matches(&self, entry: &LogEntry) -> bool {
-        self.sysid.is_none_or(|s| Some(s) == entry.sysid)
+        self.source.is_none_or(|s| s == entry.source)
+            && self.sysid.is_none_or(|s| Some(s) == entry.sysid)
             && self.compid.is_none_or(|c| Some(c) == entry.compid)
             && self.name.as_deref().is_none_or(|p| {
                 if self.exact {
@@ -33,6 +53,9 @@ impl FilterExpr {
     /// Text form accepted by `parse_filters`.
     pub fn to_text(&self) -> String {
         let mut parts = Vec::new();
+        if let Some(source) = self.source {
+            parts.push(format!("@{}", source_token(source)));
+        }
         if self.sysid.is_some() || self.compid.is_some() {
             let part = |v: Option<u8>| v.map_or("*".to_string(), |v| v.to_string());
             parts.push(format!("{}:{}", part(self.sysid), part(self.compid)));
@@ -78,9 +101,21 @@ pub fn parse_filters(input: &str) -> Result<Vec<FilterExpr>, String> {
             compid: None,
             name: None,
             exact: false,
+            source: None,
             enabled,
         };
         for token in part.split_whitespace() {
+            // A '@tlog' / '@bin' token restricts to one merged-session source.
+            if let Some(name) = token.strip_prefix('@') {
+                if expr.source.is_some() {
+                    return Err(format!("more than one source in '{part}'"));
+                }
+                expr.source = Some(
+                    parse_source_token(name)
+                        .ok_or_else(|| format!("unknown source '@{name}' (use @tlog or @bin)"))?,
+                );
+                continue;
+            }
             // An id spec is digits/':'/'*' only; a bare "*" is a type pattern.
             let is_id_spec = token != "*"
                 && token
@@ -246,5 +281,22 @@ mod tests {
         assert!(!matches(&entry(2, 1, "GPS_RAW_INT")));
         assert!(matches(&entry(255, 190, "PARAM_REQUEST_LIST")));
         assert!(!matches(&entry(1, 1, "ATTITUDE")));
+    }
+
+    #[test]
+    fn source_qualifier_parses_and_matches() {
+        let exprs = parse_filters("@bin GPS, @tlog").unwrap();
+        assert_eq!(exprs[0].source, Some(LogSourceId::Secondary));
+        assert_eq!(exprs[0].name.as_deref(), Some("gps"));
+        assert_eq!(exprs[1].source, Some(LogSourceId::Primary));
+        assert_eq!(exprs[0].to_text(), "@bin GPS"); // round-trips
+
+        let mut e = entry(1, 1, "GPS");
+        e.source = LogSourceId::Secondary;
+        assert!(exprs[0].matches(&e));
+        e.source = LogSourceId::Primary;
+        assert!(!exprs[0].matches(&e)); // right type, wrong source
+
+        assert!(parse_filters("@nope").is_err());
     }
 }

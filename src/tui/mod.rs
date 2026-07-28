@@ -512,6 +512,8 @@ impl App {
             compid,
             name,
             exact: true,
+            // Source scoping is edited from the GUI; the TUI leaves it unset.
+            source: None,
             enabled,
         };
         match editor.index {
