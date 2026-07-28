@@ -22,9 +22,6 @@ pub struct LogEntry {
     pub kind: EntryKind,
     /// Which log a merged session drew this entry from. Always `Primary` for
     /// single-file sessions; a merge tags the second log's entries `Secondary`.
-    // Read by the merge, the source column and source-scoped matching (added
-    // in following commits).
-    #[allow(dead_code)]
     pub source: LogSourceId,
 }
 

@@ -47,6 +47,8 @@ pub struct Session {
     /// Set when this session is a merge of two logs; carries the time-alignment
     /// offset applied to the secondary (bin) entries. `None` for single logs.
     pub sync: Option<SyncState>,
+    /// Path of the secondary (bin) log in a merged session; `None` otherwise.
+    secondary_path: Option<String>,
 }
 
 /// Time-alignment state for a merged session. The secondary log's entries were
@@ -103,6 +105,7 @@ impl Session {
             saved_setup: Setup::default(),
             schema,
             sync: None,
+            secondary_path: None,
         }
     }
 
@@ -113,6 +116,7 @@ impl Session {
     /// absolute unix axis, and the combined entries are stable-sorted by time.
     pub fn merge(
         primary_path: String,
+        secondary_path: String,
         tlog_data: Vec<u8>,
         tlog_entries: Vec<LogEntry>,
         bin_data: Vec<u8>,
@@ -141,7 +145,35 @@ impl Session {
         // Both logs are on the absolute axis now, so show wall-clock time.
         session.time_format = TimeFormat::DateTime;
         session.sync = Some(SyncState { bin_offset_us, manual_offset_us: 0, method });
+        session.secondary_path = Some(secondary_path);
         session
+    }
+
+    /// Whether this session is a merge of two logs.
+    pub fn is_merged(&self) -> bool {
+        self.sync.is_some()
+    }
+
+    /// A short format tag (`tlog`/`bin`) for a `source`, for the compact list
+    /// column. `None` for a single-file session.
+    pub fn source_tag(&self, source: LogSourceId) -> Option<&'static str> {
+        self.is_merged().then(|| match source {
+            LogSourceId::Primary => "tlog",
+            LogSourceId::Secondary => "bin",
+        })
+    }
+
+    /// The file name of the log a `source` came from, for UI labels. `None` for
+    /// a single-file session.
+    pub fn source_name(&self, source: LogSourceId) -> Option<&str> {
+        if !self.is_merged() {
+            return None;
+        }
+        let path = match source {
+            LogSourceId::Primary => &self.path,
+            LogSourceId::Secondary => self.secondary_path.as_deref()?,
+        };
+        Some(std::path::Path::new(path).file_name().and_then(|n| n.to_str()).unwrap_or(path))
     }
 
     /// A short description of how the merged logs were time-aligned, for the

@@ -84,6 +84,7 @@ pub(crate) fn load_merged_session(a: &str, b: &str) -> Result<Session> {
     };
     Ok(Session::merge(
         tlog_path.to_string(),
+        bin_path.to_string(),
         tlog_data,
         tlog_entries,
         bin_data,

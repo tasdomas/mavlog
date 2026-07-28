@@ -872,13 +872,17 @@ impl GuiApp {
         let row_height = ui.text_style_height(&egui::TextStyle::Body) + 4.0;
         self.visible_rows = (ui.available_height() / row_height).floor().max(1.0) as usize;
 
+        let merged = session.is_merged();
         let mut builder = TableBuilder::new(ui)
             .striped(true)
             .sense(egui::Sense::click())
             .column(Column::exact(60.0))
             .column(Column::exact(time_width))
-            .column(Column::exact(70.0))
-            .column(Column::initial(160.0).at_least(80.0).resizable(true));
+            .column(Column::exact(70.0));
+        if merged {
+            builder = builder.column(Column::exact(46.0)); // SRC
+        }
+        builder = builder.column(Column::initial(160.0).at_least(80.0).resizable(true));
         for col in &session.columns {
             builder = builder.column(
                 Column::initial(col.name.len().max(8) as f32 * 7.0)
@@ -905,6 +909,11 @@ impl GuiApp {
                 header.col(|ui| {
                     ui.strong("SYS:CMP");
                 });
+                if merged {
+                    header.col(|ui| {
+                        ui.strong("SRC");
+                    });
+                }
                 header.col(|ui| {
                     ui.strong("MESSAGE");
                 });
@@ -936,6 +945,11 @@ impl GuiApp {
                     cell(&mut row, mark_bg, |ui| {
                         ui.label(entry.id_label());
                     });
+                    if let Some(tag) = session.source_tag(entry.source) {
+                        cell(&mut row, mark_bg, |ui| {
+                            ui.label(tag);
+                        });
+                    }
                     cell(&mut row, mark_bg, |ui| {
                         ui.label(&entry.name);
                     });
@@ -1084,8 +1098,12 @@ impl GuiApp {
             return;
         };
         let entry = &session.entries[entry_index];
+        let origin = session
+            .source_name(entry.source)
+            .map(|n| format!("  [{n}]"))
+            .unwrap_or_default();
         ui.label(
-            egui::RichText::new(format!("{} (id {})", entry.name, entry.msg_id())).strong(),
+            egui::RichText::new(format!("{} (id {}){origin}", entry.name, entry.msg_id())).strong(),
         );
         let mut body = format!(
             "Time: {}  ({})\n",

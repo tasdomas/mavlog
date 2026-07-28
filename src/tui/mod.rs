@@ -1237,11 +1237,15 @@ impl App {
                     Some(label) => format!("● {label}"),
                     None => String::new(),
                 };
+                let name = match self.session.source_tag(entry.source) {
+                    Some(tag) => format!("[{tag}] {}", entry.name),
+                    None => entry.name.clone(),
+                };
                 let mut cells = vec![
                     format!("{entry_index:>7}"),
                     self.session.format_list_time(entry.timestamp_us),
                     format!("{:>7}", entry.id_label()),
-                    entry.name.clone(),
+                    name,
                 ];
                 cells.extend(
                     self.session.columns
@@ -1318,7 +1322,12 @@ impl App {
             .detail_scroll
             .min(lines.len().saturating_sub(inner_height));
 
-        let title = format!(" {} (id {}) ", entry.name, entry.msg_id());
+        let origin = self
+            .session
+            .source_name(entry.source)
+            .map(|n| format!("[{n}] "))
+            .unwrap_or_default();
+        let title = format!(" {} (id {}) {origin}", entry.name, entry.msg_id());
         let mut block = self
             .pane_block(Focus::Detail)
             .title(Line::styled(title, Style::new().add_modifier(Modifier::BOLD)));
