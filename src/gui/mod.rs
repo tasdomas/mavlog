@@ -238,9 +238,10 @@ impl GuiApp {
     /// Show the native "open file" dialog and load the chosen file, if any.
     fn pick_and_open(&mut self) {
         if let Some(path) = rfd::FileDialog::new()
-            .add_filter("Log files", &["tlog", "bin"])
+            .add_filter("Logs & sessions", &["tlog", "bin", "mavses"])
             .add_filter("MAVLink tlog", &["tlog"])
             .add_filter("ArduPilot DataFlash", &["bin"])
+            .add_filter("Saved session", &["mavses"])
             .pick_file()
         {
             self.request_open(path);
@@ -389,7 +390,7 @@ impl GuiApp {
     /// Read, parse and load a log file, replacing the current session on
     /// success or setting `self.error` on failure.
     fn open_path(&mut self, path: &std::path::Path) {
-        match crate::load_session(&path.to_string_lossy()) {
+        match crate::load_one(&path.to_string_lossy()) {
             Ok(mut session) => {
                 self.status = session.load_setup();
                 self.filters_state.cancel_editor();
@@ -525,6 +526,24 @@ impl GuiApp {
         };
         self.status = Some(match session.save_setup() {
             Ok(path) => format!("Setup saved to {path}"),
+            Err(err) => err,
+        });
+    }
+
+    /// Prompt for a session-file name and save the merged session to it.
+    fn save_session_file(&mut self) {
+        let Some(session) = &mut self.session else {
+            return;
+        };
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("Saved session", &["mavses"])
+            .set_file_name("session.mavses")
+            .save_file()
+        else {
+            return;
+        };
+        self.status = Some(match session.save_session_file(&path.to_string_lossy()) {
+            Ok(msg) => msg,
             Err(err) => err,
         });
     }
@@ -778,7 +797,17 @@ impl GuiApp {
                 {
                     self.plots_state.add_plot(session);
                 }
-                if ui
+                // Merged sessions persist to a named session file (two logs +
+                // settings); single logs use the per-file setup sidecar.
+                if self.session.as_ref().is_some_and(Session::is_merged) {
+                    if ui
+                        .button("Save session…")
+                        .on_hover_text("Save both logs, the time offset and all settings")
+                        .clicked()
+                    {
+                        self.save_session_file();
+                    }
+                } else if ui
                     .button("Save setup")
                     .on_hover_text(hint(&ctx, &SAVE_SHORTCUT, "w"))
                     .clicked()

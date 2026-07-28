@@ -7,7 +7,7 @@ use crate::core::column::{parse_columns, CustomColumn};
 use crate::core::entry::{EntryKind, LogEntry, LogSourceId};
 use crate::core::filter::{parse_filters, FilterExpr};
 use crate::core::plot::PlotDef;
-use crate::core::setup::{setup_path, Setup};
+use crate::core::setup::{setup_path, SessionFile, Setup};
 use crate::core::sync::SyncMethod;
 use crate::core::time::{format_datetime, format_offset, TimeFormat};
 use crate::{dataflash, tlog};
@@ -482,29 +482,57 @@ impl Session {
         let json = std::fs::read_to_string(&path).ok()?;
         match serde_json::from_str::<Setup>(&json) {
             Ok(setup) => {
-                self.time_format = setup.time_format;
-                if let Ok(filters) = parse_filters(&setup.filter) {
-                    self.filters = filters;
-                    self.filter_text = setup.filter.trim().to_string();
-                }
-                self.marks = setup
-                    .marks
-                    .into_iter()
-                    .filter(|&(i, _)| i < self.entries.len())
-                    .collect();
-                if let Ok(columns) = parse_columns(&setup.columns) {
-                    self.set_columns(columns);
-                }
-                self.plots = setup.plots;
-                self.apply_filter();
-                self.select_entry(setup.selected);
-                // Baseline for `is_dirty`: the just-loaded state has no unsaved
-                // changes. Rebuilt from the applied fields so it matches their
-                // normalized form (trimmed filter, re-parsed columns).
-                self.saved_setup = self.current_setup();
+                self.apply_setup(setup);
                 Some(format!("Loaded setup from {path}"))
             }
             Err(err) => Some(format!("Failed to load {path}: {err}")),
+        }
+    }
+
+    /// Apply a `Setup` (filters, columns, plots, marks, time format, selection)
+    /// and reset the dirty baseline to it. Shared by sidecar and session-file
+    /// loading.
+    pub fn apply_setup(&mut self, setup: Setup) {
+        self.time_format = setup.time_format;
+        if let Ok(filters) = parse_filters(&setup.filter) {
+            self.filters = filters;
+            self.filter_text = setup.filter.trim().to_string();
+        }
+        self.marks = setup
+            .marks
+            .into_iter()
+            .filter(|&(i, _)| i < self.entries.len())
+            .collect();
+        if let Ok(columns) = parse_columns(&setup.columns) {
+            self.set_columns(columns);
+        }
+        self.plots = setup.plots;
+        self.apply_filter();
+        self.select_entry(setup.selected);
+        // Baseline for `is_dirty`: the just-applied state has no unsaved changes.
+        self.saved_setup = self.current_setup();
+    }
+
+    /// Save a merged session to a session file at `path`: the two source log
+    /// paths, the manual time offset, and all settings. Errors for a
+    /// single-file session (use `save_setup` instead).
+    pub fn save_session_file(&mut self, path: &str) -> Result<String, String> {
+        let Some((secondary, sync)) = self.secondary_path.clone().zip(self.sync.as_ref()) else {
+            return Err("Not a merged session".to_string());
+        };
+        let file = SessionFile {
+            primary_path: self.path.clone(),
+            secondary_path: secondary,
+            manual_offset_us: sync.manual_offset_us,
+            setup: self.current_setup(),
+        };
+        let json = serde_json::to_string_pretty(&file).expect("session serializes");
+        match std::fs::write(path, json) {
+            Ok(()) => {
+                self.saved_setup = file.setup;
+                Ok(format!("Session saved to {path}"))
+            }
+            Err(err) => Err(format!("Failed to save {path}: {err}")),
         }
     }
 }

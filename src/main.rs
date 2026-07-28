@@ -9,6 +9,7 @@ use std::{env, fs};
 use anyhow::{bail, Context, Result};
 
 use crate::core::session::Session;
+use crate::core::setup::SESSION_EXT;
 use crate::core::sync::{self, SyncMethod};
 
 fn main() -> Result<()> {
@@ -26,7 +27,7 @@ fn main() -> Result<()> {
     // time-synchronized session.
     let session = match paths.as_slice() {
         [] => None,
-        [p] => Some(load_session(p)?),
+        [p] => Some(load_one(p)?),
         [a, b] => Some(load_merged_session(a, b)?),
         _ => bail!("expected at most two log files, got {}", paths.len()),
     };
@@ -95,6 +96,45 @@ pub(crate) fn load_merged_session(a: &str, b: &str) -> Result<Session> {
     ))
 }
 
+/// Open one path: a saved session file, or a single log. (CLI two-file merge
+/// is handled separately in `main`.)
+pub(crate) fn load_one(path: &str) -> Result<Session> {
+    if is_session_file(path) {
+        load_session_file(path)
+    } else {
+        load_session(path)
+    }
+}
+
+/// Whether `path` is a session file (by extension).
+pub(crate) fn is_session_file(path: &str) -> bool {
+    std::path::Path::new(path)
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case(SESSION_EXT))
+}
+
+/// Restore a merged session from a session file: re-read both logs, re-apply
+/// the saved manual offset (so the entry order — and thus the saved marks —
+/// matches), then apply the settings. Log paths are resolved relative to the
+/// session file when not absolute.
+pub(crate) fn load_session_file(path: &str) -> Result<Session> {
+    let json = fs::read_to_string(path).with_context(|| format!("failed to read {path}"))?;
+    let file: crate::core::setup::SessionFile =
+        serde_json::from_str(&json).with_context(|| format!("bad session file {path}"))?;
+    let base = std::path::Path::new(path).parent();
+    let resolve = |p: &str| -> String {
+        let pb = std::path::Path::new(p);
+        match (pb.is_absolute(), base) {
+            (false, Some(dir)) => dir.join(pb).to_string_lossy().into_owned(),
+            _ => p.to_string(),
+        }
+    };
+    let mut session = load_merged_session(&resolve(&file.primary_path), &resolve(&file.secondary_path))?;
+    session.set_manual_offset(file.manual_offset_us);
+    session.apply_setup(file.setup);
+    Ok(session)
+}
+
 /// Whether to parse `path` as an ArduPilot DataFlash `.bin` log: a `.bin`
 /// extension, or the DataFlash record magic at the start of the file.
 fn is_dataflash(path: &str, data: &[u8]) -> bool {
@@ -109,7 +149,7 @@ fn is_dataflash(path: &str, data: &[u8]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_dataflash, load_merged_session, load_session};
+    use super::{is_dataflash, load_merged_session, load_one, load_session};
     use crate::core::entry::LogSourceId;
     use crate::core::sync::SyncMethod;
     use crate::core::time::TimeFormat;
@@ -258,5 +298,71 @@ mod tests {
         let last = session.entries.last().unwrap();
         assert_eq!(last.name, "ATT");
         assert!((session.decode_fields(att).unwrap()["Roll"].as_f64().unwrap() - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn session_file_round_trips() {
+        // Minimal tlog (SYSTEM_TIME anchor + HEARTBEAT) and bin (ATT).
+        let t0: u64 = 1_600_000_000_000_000;
+        let trec = |ts: u64, f: &[u8]| {
+            let mut r = ts.to_be_bytes().to_vec();
+            r.extend_from_slice(f);
+            r
+        };
+        let mut st_payload = t0.to_le_bytes().to_vec();
+        st_payload.extend(0u32.to_le_bytes());
+        let mut st = vec![0xFD, st_payload.len() as u8, 0, 0, 0, 1, 1, 2, 0, 0];
+        st.extend(&st_payload);
+        st.extend([0, 0]);
+        let hb: &[u8] = &[0xFD, 9, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 2, 3, 81, 4, 3, 0, 0];
+        let mut tlog = trec(t0, &st);
+        tlog.extend(trec(t0, hb));
+
+        let brec = |t: u8, body: &[u8]| {
+            let mut r = vec![0xA3, 0x95, t];
+            r.extend_from_slice(body);
+            r
+        };
+        let fixed = |s: &str, w: usize| {
+            let mut v = s.as_bytes().to_vec();
+            v.resize(w, 0);
+            v
+        };
+        let fmt = |t: u8, len: u8, name: &str, format: &str, labels: &str| {
+            let mut b = vec![t, len];
+            b.extend(fixed(name, 4));
+            b.extend(fixed(format, 16));
+            b.extend(fixed(labels, 64));
+            b
+        };
+        let mut bin = brec(0x80, &fmt(0x80, 89, "FMT", "BBnNZ", "Type,Length,Name,Format,Columns"));
+        bin.extend(brec(0x80, &fmt(2, 15, "ATT", "Qf", "TimeUS,Roll")));
+        let mut att = 1_000_000u64.to_le_bytes().to_vec();
+        att.extend(1.0f32.to_le_bytes());
+        bin.extend(brec(2, &att));
+
+        let dir = std::env::temp_dir();
+        let pid = std::process::id();
+        let tpath = dir.join(format!("mavlog-ses-{pid}.tlog"));
+        let bpath = dir.join(format!("mavlog-ses-{pid}.bin"));
+        let spath = dir.join(format!("mavlog-ses-{pid}.mavses"));
+        std::fs::write(&tpath, &tlog).unwrap();
+        std::fs::write(&bpath, &bin).unwrap();
+
+        // Merge, mark the ATT message, save a session file.
+        let mut session = load_merged_session(tpath.to_str().unwrap(), bpath.to_str().unwrap()).unwrap();
+        let att_index = session.entries.iter().position(|e| e.name == "ATT").unwrap();
+        session.marks.insert(att_index, "roll spike".to_string());
+        session.save_session_file(spath.to_str().unwrap()).unwrap();
+
+        // Reopen via the session file: the mark lands on the ATT message again.
+        let reloaded = load_one(spath.to_str().unwrap()).unwrap();
+        let att2 = reloaded.entries.iter().position(|e| e.name == "ATT").unwrap();
+        assert_eq!(reloaded.marks.get(&att2).map(String::as_str), Some("roll spike"));
+        assert!(reloaded.is_merged());
+
+        for p in [&tpath, &bpath, &spath] {
+            let _ = std::fs::remove_file(p);
+        }
     }
 }
