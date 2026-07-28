@@ -44,9 +44,11 @@ enum MarkAction {
 }
 
 /// A destructive action deferred while the unsaved-changes prompt is up:
-/// replacing the current session with another file, or quitting.
+/// replacing the current session with another file, merging a second log, or
+/// quitting.
 enum PendingAction {
     Open(std::path::PathBuf),
+    AddLog(std::path::PathBuf),
     Quit,
 }
 
@@ -255,6 +257,48 @@ impl GuiApp {
         }
     }
 
+    /// Show the file dialog and merge the chosen log into the current session.
+    fn pick_and_add(&mut self) {
+        if let Some(path) = rfd::FileDialog::new()
+            .add_filter("Log files", &["tlog", "bin"])
+            .pick_file()
+        {
+            self.request_add_log(path);
+        }
+    }
+
+    /// Merge `path` into the current session (same unsaved-changes guard as
+    /// opening, since it rebuilds the session from disk).
+    fn request_add_log(&mut self, path: std::path::PathBuf) {
+        if self.session.as_ref().is_some_and(Session::is_dirty) {
+            self.pending = Some(PendingAction::AddLog(path));
+        } else {
+            self.add_log(&path);
+        }
+    }
+
+    /// Combine the current single log with `path` into one synchronized session.
+    fn add_log(&mut self, path: &std::path::Path) {
+        let Some(session) = &self.session else {
+            return self.open_path(path); // nothing open yet — just open it
+        };
+        if session.is_merged() {
+            self.error = Some("This session already merges two logs.".to_string());
+            return;
+        }
+        match crate::load_merged_session(&session.path.clone(), &path.to_string_lossy()) {
+            Ok(merged) => {
+                self.status = merged.sync_status();
+                self.filters_state.cancel_editor();
+                self.session = Some(merged);
+                self.plots_state.reset();
+                self.error = None;
+                self.scroll_to_selected = true;
+            }
+            Err(e) => self.error = Some(e.to_string()),
+        }
+    }
+
     /// Quit, guarding the current session's unsaved changes: if there are any,
     /// raise the prompt; otherwise close the window straight away.
     fn request_quit(&mut self, ctx: &egui::Context) {
@@ -271,6 +315,7 @@ impl GuiApp {
     fn resolve_pending(&mut self, ctx: &egui::Context) {
         match self.pending.take() {
             Some(PendingAction::Open(path)) => self.open_path(&path),
+            Some(PendingAction::AddLog(path)) => self.add_log(&path),
             Some(PendingAction::Quit) => {
                 // Approve the close and re-issue it; next frame's
                 // close_requested is let through by `allow_close`.
@@ -286,6 +331,7 @@ impl GuiApp {
     fn unsaved_changes_dialog(&mut self, ctx: &egui::Context) {
         let verb = match self.pending {
             Some(PendingAction::Open(_)) => "opening another file",
+            Some(PendingAction::AddLog(_)) => "adding another log",
             Some(PendingAction::Quit) => "quitting",
             None => return,
         };
@@ -673,6 +719,15 @@ impl GuiApp {
                 .clicked()
             {
                 self.pick_and_open();
+            }
+            // Offer merging a second log once one is open and not already merged.
+            if self.session.as_ref().is_some_and(|s| !s.is_merged())
+                && ui
+                    .button("Add log…")
+                    .on_hover_text("Merge a second log (.tlog + .bin) into this session")
+                    .clicked()
+            {
+                self.pick_and_add();
             }
             ui.separator();
             ui.label(self.title());
