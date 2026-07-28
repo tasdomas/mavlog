@@ -154,6 +154,46 @@ impl Session {
         self.sync.is_some()
     }
 
+    /// Re-align the secondary (bin) log by a user offset (µs) and re-sort the
+    /// merged list. Because re-sorting renumbers entries, marks, column indices
+    /// and the selection are remapped through the sort permutation. No-op for a
+    /// single-file session.
+    pub fn set_manual_offset(&mut self, manual_offset_us: i64) {
+        let Some(old) = self.sync.as_ref().map(|s| s.manual_offset_us) else {
+            return;
+        };
+        let delta = manual_offset_us - old;
+        if let Some(s) = self.sync.as_mut() {
+            s.manual_offset_us = manual_offset_us;
+        }
+        if delta == 0 {
+            return;
+        }
+        for e in self.entries.iter_mut().filter(|e| e.source == LogSourceId::Secondary) {
+            e.timestamp_us = (e.timestamp_us as i64 + delta).max(0) as u64;
+        }
+
+        // Stable-sort via an index permutation so index-keyed state survives.
+        let selected_entry = self.filtered.get(self.selected).copied();
+        let mut order: Vec<usize> = (0..self.entries.len()).collect();
+        order.sort_by_key(|&i| self.entries[i].timestamp_us);
+        let mut new_pos = vec![0usize; order.len()];
+        for (new_i, &old_i) in order.iter().enumerate() {
+            new_pos[old_i] = new_i;
+        }
+        let mut slots: Vec<Option<LogEntry>> = self.entries.drain(..).map(Some).collect();
+        self.entries = order.iter().map(|&old_i| slots[old_i].take().unwrap()).collect();
+
+        self.marks = self.marks.iter().map(|(&old, l)| (new_pos[old], l.clone())).collect();
+        let cols = std::mem::take(&mut self.columns);
+        self.set_columns(cols);
+        self.start_us = self.entries.first().map_or(0, |e| e.timestamp_us);
+        self.apply_filter();
+        if let Some(old_sel) = selected_entry {
+            self.select_entry(new_pos[old_sel]);
+        }
+    }
+
     /// A short format tag (`tlog`/`bin`) for a `source`, for the compact list
     /// column. `None` for a single-file session.
     pub fn source_tag(&self, source: LogSourceId) -> Option<&'static str> {

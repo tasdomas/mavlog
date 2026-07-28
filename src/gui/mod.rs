@@ -846,6 +846,22 @@ impl GuiApp {
                     self.settings_focus = false;
                 }
                 ui.radio_value(&mut session.time_format, TimeFormat::OffsetSecs, "Offset (s)");
+
+                // Merged sessions: a manual nudge to fine-tune the bin's
+                // alignment on top of the auto (SYSTEM_TIME) offset.
+                if session.is_merged() {
+                    ui.separator();
+                    ui.label("Merged logs — nudge bin time:");
+                    let manual = session.sync.as_ref().map_or(0, |s| s.manual_offset_us);
+                    let mut secs = manual as f64 / 1e6;
+                    if ui
+                        .add(egui::DragValue::new(&mut secs).suffix(" s").speed(0.01).max_decimals(3))
+                        .on_hover_text("Shift the bin log relative to the tlog to line events up")
+                        .changed()
+                    {
+                        session.set_manual_offset((secs * 1e6).round() as i64);
+                    }
+                }
             });
         self.settings_open = open;
     }

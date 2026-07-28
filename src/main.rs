@@ -246,5 +246,17 @@ mod tests {
         let hb_entry = session.entries.iter().find(|e| e.name == "HEARTBEAT").unwrap();
         assert_eq!(hb_entry.source, LogSourceId::Primary);
         assert_eq!(session.decode_fields(hb_entry).unwrap()["mavlink_version"], 3);
+
+        // A manual nudge of +3s pushes the ATT past the t0+2s HEARTBEAT and the
+        // list stays sorted; the bin entry still decodes across the join.
+        let mut session = session;
+        session.set_manual_offset(3_000_000);
+        let ts: Vec<u64> = session.entries.iter().map(|e| e.timestamp_us).collect();
+        assert!(ts.windows(2).all(|w| w[0] <= w[1]));
+        let att = session.entries.iter().find(|e| e.name == "ATT").unwrap();
+        assert_eq!(att.timestamp_us, t0 + 4_000_000);
+        let last = session.entries.last().unwrap();
+        assert_eq!(last.name, "ATT");
+        assert!((session.decode_fields(att).unwrap()["Roll"].as_f64().unwrap() - 1.0).abs() < 1e-6);
     }
 }
