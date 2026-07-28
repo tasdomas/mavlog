@@ -715,6 +715,8 @@ impl App {
             name,
             sysid,
             compid,
+            // Source scoping is edited from the GUI; the TUI leaves it unset.
+            source: None,
             msg_type: self.session.type_options[editor.type_choice].clone(),
             field: editor.field.clone(),
             matches: Vec::new(),

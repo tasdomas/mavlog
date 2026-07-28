@@ -295,7 +295,8 @@ impl Session {
                 .iter()
                 .enumerate()
                 .filter(|(_, e)| {
-                    col.sysid.is_none_or(|s| Some(s) == e.sysid)
+                    col.source.is_none_or(|s| s == e.source)
+                        && col.sysid.is_none_or(|s| Some(s) == e.sysid)
                         && col.compid.is_none_or(|c| Some(c) == e.compid)
                         && e.name.eq_ignore_ascii_case(&col.msg_type)
                 })

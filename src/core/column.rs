@@ -1,11 +1,16 @@
 //! Custom list columns: definitions and their text syntax.
 
+use crate::core::entry::LogSourceId;
+use crate::core::filter::source_token;
+
 /// A user-defined list column showing the last-seen value of one field of
 /// one message type.
 pub struct CustomColumn {
     pub name: String,
     pub sysid: Option<u8>,
     pub compid: Option<u8>,
+    /// Restrict to one log of a merged session. `None` matches either.
+    pub source: Option<LogSourceId>,
     /// Exact message-type name, uppercase.
     pub msg_type: String,
     pub field: String,
@@ -16,9 +21,12 @@ pub struct CustomColumn {
 impl CustomColumn {
     pub fn to_text(&self) -> String {
         let mut expr = String::new();
+        if let Some(source) = self.source {
+            expr = format!("@{} ", source_token(source));
+        }
         if self.sysid.is_some() || self.compid.is_some() {
             let part = |v: Option<u8>| v.map_or("*".to_string(), |v| v.to_string());
-            expr = format!("{}:{} ", part(self.sysid), part(self.compid));
+            expr = format!("{expr}{}:{} ", part(self.sysid), part(self.compid));
         }
         format!("{} = {expr}{}.{}", self.name, self.msg_type, self.field)
     }
@@ -39,8 +47,18 @@ pub fn parse_columns(input: &str) -> Result<Vec<CustomColumn>, String> {
         if name.is_empty() {
             return Err(usage());
         }
-        let (mut sysid, mut compid, mut type_field) = (None, None, None);
+        let (mut sysid, mut compid, mut source, mut type_field) = (None, None, None, None);
         for token in expr.split_whitespace() {
+            if let Some(src) = token.strip_prefix('@') {
+                if source.is_some() {
+                    return Err(format!("more than one source in '{part}'"));
+                }
+                source = Some(
+                    crate::core::filter::parse_source_token(src)
+                        .ok_or_else(|| format!("unknown source '@{src}' (use @tlog or @bin)"))?,
+                );
+                continue;
+            }
             let is_id_spec = token
                 .chars()
                 .all(|c| c.is_ascii_digit() || c == ':' || c == '*');
@@ -73,6 +91,7 @@ pub fn parse_columns(input: &str) -> Result<Vec<CustomColumn>, String> {
             name: name.to_string(),
             sysid,
             compid,
+            source,
             msg_type,
             field,
             matches: Vec::new(),
@@ -96,6 +115,11 @@ mod tests {
         assert_eq!(cols[0].to_text(), "alt = 1:1 GLOBAL_POSITION_INT.relative_alt");
         assert_eq!((cols[1].sysid, cols[1].compid), (None, None));
         assert_eq!(cols[1].to_text(), "spd = VFR_HUD.groundspeed");
+
+        // A source-scoped column round-trips through the @tag syntax.
+        let scoped = parse_columns("alt = @bin BARO.Alt").unwrap();
+        assert_eq!(scoped[0].source, Some(LogSourceId::Secondary));
+        assert_eq!(scoped[0].to_text(), "alt = @bin BARO.Alt");
 
         assert!(parse_columns("").unwrap().is_empty());
         assert!(parse_columns("noexpr").is_err());

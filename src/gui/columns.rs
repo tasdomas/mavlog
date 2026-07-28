@@ -4,7 +4,7 @@ use eframe::egui;
 
 use crate::core::column::CustomColumn;
 use crate::core::session::Session;
-use crate::gui::widgets::searchable_combo;
+use crate::gui::widgets::{searchable_combo, source_choice, source_combo, source_from_choice};
 
 /// Open editor for a single custom column (name/id/type/field), like the
 /// TUI's ColumnEditor.
@@ -17,6 +17,8 @@ pub struct ColumnEditor {
     /// Index into `Session::type_options` (a type is required).
     type_choice: usize,
     field: String,
+    /// 0 = any, 1 = primary (tlog), 2 = secondary (bin). Only used when merged.
+    source_choice: usize,
     id_query: String,
     type_query: String,
     field_query: String,
@@ -168,6 +170,7 @@ pub fn show(ctx: &egui::Context, open: &mut bool, session: &mut Session, state: 
                         editor.field = field_options[choice].clone();
                     }
                 });
+                source_combo(ui, "column_source", session, &mut editor.source_choice);
                 if let Some(err) = &state.error {
                     ui.colored_label(egui::Color32::LIGHT_RED, err);
                 }
@@ -208,6 +211,7 @@ pub fn show(ctx: &egui::Context, open: &mut bool, session: &mut Session, state: 
                         name,
                         sysid,
                         compid,
+                        source: source_from_choice(editor.source_choice),
                         msg_type: session.type_options[editor.type_choice].clone(),
                         field: editor.field,
                         matches: Vec::new(),
@@ -240,6 +244,7 @@ fn editor_for(session: &Session, index: Option<usize>) -> ColumnEditor {
             .and_then(|c| session.type_options.iter().position(|t| t.eq_ignore_ascii_case(&c.msg_type)))
             .unwrap_or(0),
         field: col.map(|c| c.field.clone()).unwrap_or_default(),
+        source_choice: source_choice(col.and_then(|c| c.source)),
         id_query: String::new(),
         type_query: String::new(),
         field_query: String::new(),

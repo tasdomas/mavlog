@@ -28,7 +28,8 @@ pub fn source_token(source: LogSourceId) -> &'static str {
     }
 }
 
-fn parse_source_token(s: &str) -> Option<LogSourceId> {
+/// Parse a source token (`tlog` / `bin`, case-insensitive) into a source id.
+pub fn parse_source_token(s: &str) -> Option<LogSourceId> {
     match s.to_ascii_lowercase().as_str() {
         "tlog" => Some(LogSourceId::Primary),
         "bin" => Some(LogSourceId::Secondary),
