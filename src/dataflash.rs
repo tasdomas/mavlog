@@ -206,7 +206,12 @@ fn resolve_units_and_mults(
         };
         for (i, field) in fmt.fields.iter_mut().enumerate() {
             if let Some(&mid) = mult_ids.get(i) {
-                field.multiplier = mults.get(&mid).copied().unwrap_or(1.0);
+                // ArduPilot's MULT table lists the "no multiplier" id '-' with
+                // the literal value 0 as a sentinel; a real 0 would zero the
+                // data (e.g. RCOU PWM channels). Treat 0 as no scaling, matching
+                // pymavlink and ArduPilot's own log viewers.
+                let m = mults.get(&mid).copied().unwrap_or(1.0);
+                field.multiplier = if m == 0.0 { 1.0 } else { m };
             }
             if let Some(&uid) = unit_ids.get(i) {
                 field.unit = units.get(&uid).filter(|l| !l.is_empty()).cloned();
@@ -471,6 +476,39 @@ mod tests {
         assert_eq!(alt.unit.as_deref(), Some("m"));
         // Looked up by name (case-insensitive), as the plot editor does.
         assert_eq!(schema.field_unit("baro", "alt").as_deref(), Some("m"));
+    }
+
+    #[test]
+    fn dash_multiplier_means_no_scaling() {
+        // ArduPilot marks "no multiplier" fields (e.g. RCOU PWM channels) with
+        // the id '-', whose MULT-table value is the sentinel 0. That must not
+        // zero the data.
+        let mut data = fmt_of_fmt();
+        data.extend(record(FMT_TYPE, &fmt_body(2, 13, "RCOU", "QH", "TimeUS,C1")));
+        data.extend(record(FMT_TYPE, &fmt_body(3, 20, "MULT", "Qbd", "TimeUS,Id,Mult")));
+        data.extend(record(FMT_TYPE, &fmt_body(4, 44, "FMTU", "QBNN", "TimeUS,FmtType,UnitIds,MultIds")));
+
+        // MULT '-' = 0 (the sentinel ArduPilot emits).
+        let mut m = 0u64.to_le_bytes().to_vec();
+        m.push(b'-');
+        m.extend(0.0f64.to_le_bytes());
+        data.extend(record(3, &m));
+        // FMTU for RCOU: C1's multiplier id is '-'.
+        let mut f = 0u64.to_le_bytes().to_vec();
+        f.push(2);
+        f.extend(fixed("--", 16));
+        f.extend(fixed("F-", 16));
+        data.extend(record(4, &f));
+
+        // An RCOU record with C1 = 1500 us.
+        let mut body = 1_000_000u64.to_le_bytes().to_vec();
+        body.extend(1500u16.to_le_bytes());
+        data.extend(record(2, &body));
+
+        let (entries, schema) = parse(&data);
+        let rcou = entries.iter().find(|e| e.name == "RCOU").unwrap();
+        let v = decode_fields(&schema, 2, &data[rcou.payload.clone()]).unwrap();
+        assert_eq!(v["C1"], serde_json::json!(1500));
     }
 
     #[test]
