@@ -154,7 +154,11 @@ fn add_requested(ctx: &egui::Context) -> bool {
 
 impl GuiApp {
     fn new(mut session: Option<Session>) -> Self {
-        let status = session.as_mut().and_then(Session::load_setup);
+        // A merged session announces its time alignment; a single log reports
+        // any restored setup instead.
+        let status = session
+            .as_mut()
+            .and_then(|s| s.sync_status().or_else(|| s.load_setup()));
         Self {
             session,
             status,

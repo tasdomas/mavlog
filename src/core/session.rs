@@ -4,10 +4,11 @@
 use std::collections::HashMap;
 
 use crate::core::column::{parse_columns, CustomColumn};
-use crate::core::entry::{EntryKind, LogEntry};
+use crate::core::entry::{EntryKind, LogEntry, LogSourceId};
 use crate::core::filter::{parse_filters, FilterExpr};
 use crate::core::plot::PlotDef;
 use crate::core::setup::{setup_path, Setup};
+use crate::core::sync::SyncMethod;
 use crate::core::time::{format_datetime, format_offset, TimeFormat};
 use crate::{dataflash, tlog};
 
@@ -43,6 +44,19 @@ pub struct Session {
     /// DataFlash message schema; `None` for MAVLink logs, which decode via the
     /// `mavlink` dialect instead.
     schema: Option<dataflash::Schema>,
+    /// Set when this session is a merge of two logs; carries the time-alignment
+    /// offset applied to the secondary (bin) entries. `None` for single logs.
+    pub sync: Option<SyncState>,
+}
+
+/// Time-alignment state for a merged session. The secondary log's entries were
+/// placed at `boot + bin_offset_us + manual_offset_us` on the primary's unix
+/// axis. Secondary entries are identified by their `LogEntry.source`, so no
+/// buffer split index is needed here.
+pub struct SyncState {
+    pub bin_offset_us: i64,
+    pub manual_offset_us: i64,
+    pub method: SyncMethod,
 }
 
 impl Session {
@@ -88,7 +102,61 @@ impl Session {
             // sidecar exists, `load_setup` resets this baseline after applying.
             saved_setup: Setup::default(),
             schema,
+            sync: None,
         }
+    }
+
+    /// Merge a primary MAVLink tlog with a secondary ArduPilot bin into one
+    /// time-synchronized session. The two byte buffers are concatenated (so
+    /// decoding is unchanged — payload ranges just index further in), the bin's
+    /// boot-relative timestamps are shifted by `bin_offset_us` onto the tlog's
+    /// absolute unix axis, and the combined entries are stable-sorted by time.
+    pub fn merge(
+        primary_path: String,
+        tlog_data: Vec<u8>,
+        tlog_entries: Vec<LogEntry>,
+        bin_data: Vec<u8>,
+        bin_entries: Vec<LogEntry>,
+        bin_schema: dataflash::Schema,
+        bin_offset_us: i64,
+        method: SyncMethod,
+    ) -> Self {
+        let split = tlog_data.len();
+        let mut data = tlog_data;
+        data.extend_from_slice(&bin_data);
+
+        let mut entries = tlog_entries; // already absolute unix, tagged Primary
+        for mut e in bin_entries {
+            e.payload.start += split;
+            e.payload.end += split;
+            e.source = LogSourceId::Secondary;
+            e.timestamp_us = (e.timestamp_us as i64 + bin_offset_us).max(0) as u64;
+            entries.push(e);
+        }
+        // Stable so entries with equal timestamps keep primary-before-secondary
+        // order, which the partition_point users rely on.
+        entries.sort_by_key(|e| e.timestamp_us);
+
+        let mut session = Session::new(primary_path, data, entries, Some(bin_schema));
+        // Both logs are on the absolute axis now, so show wall-clock time.
+        session.time_format = TimeFormat::DateTime;
+        session.sync = Some(SyncState { bin_offset_us, manual_offset_us: 0, method });
+        session
+    }
+
+    /// A short description of how the merged logs were time-aligned, for the
+    /// status bar. `None` for single-file sessions.
+    pub fn sync_status(&self) -> Option<String> {
+        let s = self.sync.as_ref()?;
+        let secs = (s.bin_offset_us + s.manual_offset_us) as f64 / 1e6;
+        Some(match s.method {
+            SyncMethod::SystemTime => {
+                format!("Merged: bin aligned via SYSTEM_TIME (offset {secs:.3}s)")
+            }
+            SyncMethod::ManualOnly => {
+                "Merged: no SYSTEM_TIME found — align the logs manually".to_string()
+            }
+        })
     }
 
     /// Entry index of the selected message, if any are visible.

@@ -7,4 +7,5 @@ pub mod filter;
 pub mod plot;
 pub mod session;
 pub mod setup;
+pub mod sync;
 pub mod time;

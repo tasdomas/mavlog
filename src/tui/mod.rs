@@ -22,6 +22,10 @@ pub fn run(session: Session) -> Result<()> {
     let _ = crossterm::execute!(std::io::stdout(), event::EnableMouseCapture);
     let mut app = App::new(session);
     app.load_setup();
+    // A merged session shows its alignment note over any restored-setup message.
+    if let Some(note) = app.session.sync_status() {
+        app.status = Some(note);
+    }
     let result = app.run(&mut terminal);
     let _ = crossterm::execute!(std::io::stdout(), event::DisableMouseCapture);
     ratatui::restore();

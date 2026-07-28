@@ -35,8 +35,6 @@ pub struct LogEntry {
 pub enum LogSourceId {
     #[default]
     Primary,
-    // Constructed by `Session::merge` (added in a following commit).
-    #[allow(dead_code)]
     Secondary,
 }
 
