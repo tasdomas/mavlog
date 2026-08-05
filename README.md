@@ -1,11 +1,40 @@
 # mavlog
 
-A viewer for MAVLink `.tlog` and ArduPilot DataFlash `.bin` logs: a
-scrollable, filterable message list with a decoded detail pane, custom
-"last-seen value" columns, marks with labels, jump-to-time, and interactive
-plots. The log format is chosen by file extension (with a content-sniff
-fallback); `.bin` fields, units and multipliers come from the log's own
-embedded `FMT`/`FMTU` schema, and times are shown relative to boot.
+A fast, keyboard-driven viewer for **MAVLink `.tlog`** and **ArduPilot
+DataFlash `.bin`** flight logs. Scroll and filter the message stream, read any
+message decoded field-by-field, pin "last-seen value" columns, drop labelled
+marks, jump to a moment in time, and graph any numeric field against time — all
+from one window.
+
+![mavlog GUI — message list with a decoded detail pane](docs/screenshots/01-gui-overview.png)
+
+The log format is picked from the file extension (with a content-sniff
+fallback). For `.bin` logs, field names, units and multipliers come straight
+from the log's own embedded `FMT`/`FMTU` schema, and timestamps are shown
+relative to boot.
+
+## Features
+
+- **Two log formats, one core** — MAVLink `.tlog` and ArduPilot DataFlash
+  `.bin`, opened by extension or content sniff.
+- **Decoded detail pane** — every field of the selected message, expanded and
+  human-readable.
+- **Filters** — show only the message types you care about; toggle each one on
+  and off without deleting it.
+- **Custom columns** — pin the last-seen value of any field (e.g.
+  `GLOBAL_POSITION_INT.relative_alt`) as its own column in the list.
+- **Interactive plots** — graph one or more fields against time in a movable,
+  zoomable window; series sharing a unit share a Y axis, others get their own.
+- **Marks** — flag interesting messages with labels, jump between them, and
+  overlay them as vertical lines on plots.
+- **Merge a `.tlog` + `.bin`** onto a single synchronized timeline.
+- **Everything persists** — filters, columns, marks, time format and plots are
+  saved to a sidecar and round-trip between the GUI and the TUI.
+- **Two frontends** — a native GUI for mouse-driven browsing and plotting, and
+  a terminal UI with the same list, filters, columns and marks for headless/SSH
+  use.
+
+## Frontends
 
 Two frontends share one core:
 
@@ -34,7 +63,53 @@ written to a `FILE.tlog.mavlog.json` sidecar next to the log. It round-trips
 between the GUI and the TUI — a setup saved in one loads correctly in the
 other.
 
-### Merging a tlog and a bin
+## Browsing, columns and filters
+
+Click a row to select it and read its decoded fields in the detail pane on the
+right; the sidebar below lists your filters, plots and marks.
+
+![Custom columns, filters and marks](docs/screenshots/02-columns-filters.png)
+
+### Filters
+
+Press **Ctrl/Cmd+F** or `f` (or the toolbar's **Add filter**) to open the
+new-filter popup and define one. The Filters block, docked in the right column
+below the detail pane, appears automatically whenever any filters are
+configured and lists them; it hides itself once the last one is removed. Each
+filter has a checkbox: untick it to disable the filter without removing it, and
+the message list re-narrows immediately. A message is shown when it matches any
+enabled filter (or when none are enabled). Disabled filters are remembered in
+the saved setup, written with a leading `!` in the filter text (e.g.
+`!1:1 =HEARTBEAT`).
+
+The Filters, Plots and Marks blocks in the right column each collapse to just
+their header when you click it, freeing vertical space for the others; click the
+header again to expand. The detail pane above them is always shown.
+
+### Custom columns
+
+Press **Ctrl/Cmd+Shift+C** or `c` for the Columns window and add a column as
+`NAME = [sys[:comp]] TYPE.FIELD`, e.g.
+`alt = 1:1 GLOBAL_POSITION_INT.relative_alt`. Each column shows that field's
+most recent value on every row, so you can scan a value's evolution straight
+down the list.
+
+### Plots
+
+Press **Ctrl/Cmd+P** or `p` (or the toolbar's **Add plot**) to open the plot
+dialog and define a plot — a name and one or more fields graphed against time.
+Configured plots are listed in the right-column sidebar; tick a plot's **Show**
+box to open it in its own movable window, which updates as you browse.
+
+![An interactive plot window with mark overlays and twin Y axes](docs/screenshots/03-plots.png)
+
+Series carrying the same measurement unit share one Y axis; series with a
+different unit are rescaled onto extra axes (matplotlib twinx style). Each plot
+can optionally overlay vertical lines at your marks — toggle **Show markers** in
+the dialog. Zoom, pan and hover come from the plot widget itself, and any plot
+can be exported to PNG.
+
+## Merging a tlog and a bin
 
 A telemetry `.tlog` and the matching onboard `.bin` can be loaded into one
 session and viewed on a single timeline — pass both on the command line, or
@@ -47,7 +122,33 @@ dropdown) — so you can, for example, plot the tlog's GPS altitude against the
 bin's `BARO.Alt`. Save the whole thing (both file names, the offset and all
 settings) with **Save session…** to a `.mavses` file, and reopen it later.
 
-### GUI keyboard shortcuts
+## Terminal UI
+
+`mavlog -tui FILE` opens the same session in the terminal — same message list,
+custom columns, filters, marks and detail pane, and it reads the very same
+sidecar the GUI writes (and vice-versa). Plotting is the one GUI-only feature.
+
+```text
+ sample.tlog  —  250 of 500 messages
+┌ Filters ─────────────────────────────────────────────────────────────────────┐
+│ ATTITUDE                                                                       │
+│ VFR_HUD                                                                        │
+│ GLOBAL_POSITION_INT                                                            │
+│ !HEARTBEAT                                                                     │
+└──────────────────────────────────────────────────────────────────── f edit ──┘
+┌ Messages ──────────────────────────────────────────┐┌ ATTITUDE (id 30) ──────┐
+│#    TIME              SYS:CMP MESSAGE  alt  rel_alt ││Time: …07:06:46 (T+6.6s)│
+│   3 2024-07-17 07:06…     1:1 VFR_HUD  15.5    930  ││ATTITUDE(               │
+│   7 2024-07-17 07:06…     1:1 ATTITUDE 15.5    930  ││    ATTITUDE_DATA {     │
+│   8 2024-07-17 07:06…     1:1 GLOBAL_… 15.5   1020  ││        roll: 0.0,      │
+│   9 2024-07-17 07:06…     1:1 VFR_HUD  21.5   1020  ││        pitch: 0.0,     │
+│  13 2024-07-17 07:06…     1:1 ATTITUDE 21.5   1020  ││        yaw: 0.0,       │
+│  14 2024-07-17 07:06…     1:1 GLOBAL_… 21.5   1110  ││    },                  │
+└────────────────────────────────────────────────────┘└────────────────────────┘
+ Loaded setup from sample.tlog.mavlog.json                                 22/250
+```
+
+## Keyboard shortcuts (GUI)
 
 Every toolbar button has both a Cmd/Ctrl modifier shortcut (always active)
 and, for TUI parity, a plain letter that only fires while no text box has
@@ -70,39 +171,13 @@ inside them immediately:
 | Page Up / Page Down | Move the selection by a page |
 | Home / End | Jump to the first / last message |
 | Space | Toggle a mark on the selected message |
-| Enter | Submit a box, save an open filter/column/plot editor, or dismiss an error |
+| Enter | Submit a box, save an open editor, or dismiss an error |
 | Esc | Release a text box's focus, then cancel an open editor, then close a window or panel |
 
 Hovering any toolbar button shows its shortcut. Click a row to select it;
 right-click for a mark context menu; drag a `.tlog` or `.bin` file onto the
 window to open it. The in-app Help window (toolbar, or F1/`?`) lists the
 same shortcuts.
-
-### Filters
-
-Press Ctrl/Cmd+F or `f` (or the toolbar's **Add filter**) to open the new-filter
-popup and define one. The Filters side block, docked in the right column below
-the message contents view, appears automatically whenever any filters are
-configured and lists them; it hides itself once the last one is removed. Each
-filter has a checkbox: untick it to disable the filter without removing it, and
-the message list re-narrows immediately. A message is shown when it matches any
-enabled filter (or when none are enabled). Disabled filters are remembered in
-the saved setup, written with a leading `!` in the filter text (e.g.
-`!1:1 =HEARTBEAT`).
-
-The Filters, Plots and Marks blocks in the right column each collapse to just
-their header when you click it, freeing vertical space for the others; click the
-header again to expand. The message contents view above them is always shown.
-
-### Plots
-
-Press Ctrl/Cmd+P or `p` (or the toolbar's **Add plot**) to open the plot
-dialog and define a plot — a name and one or more fields graphed against time.
-Configured plots are listed in a sidebar in the right column, below the
-message contents view; tick a plot's **Show** box to open it in its own movable
-window, which updates as you browse.
-Each plot can optionally overlay vertical lines at your marks — toggle "Show
-markers" in the dialog. Zoom, pan and hover come from the plot widget itself.
 
 ## Building
 
