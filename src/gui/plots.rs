@@ -407,7 +407,7 @@ pub fn show_editor(ctx: &egui::Context, session: &mut Session, state: &mut Plots
                     let series = editor
                         .series
                         .into_iter()
-                        .map(|s| {
+                        .flat_map(|s| {
                             let (sysid, compid) = match s.id_choice.checked_sub(1) {
                                 Some(i) => {
                                     let (sys, comp) = session.id_options[i];
@@ -416,19 +416,45 @@ pub fn show_editor(ctx: &egui::Context, session: &mut Session, state: &mut Plots
                                 None => (None, None),
                             };
                             let msg_type = session.type_options[s.type_choice].clone();
-                            // Prefer a user-typed unit; otherwise borrow the
-                            // one the DataFlash schema records for the field.
-                            let unit = none_if_blank(s.unit)
-                                .or_else(|| session.field_unit(&msg_type, &s.field));
-                            SeriesDef {
-                                sysid,
-                                compid,
-                                msg_type,
-                                field: s.field,
-                                name: none_if_blank(s.name),
-                                unit,
-                                source: crate::gui::widgets::source_from_choice(s.source_choice),
-                            }
+                            let source = crate::gui::widgets::source_from_choice(s.source_choice);
+                            let user_name = none_if_blank(s.name);
+                            let user_unit = none_if_blank(s.unit);
+                            // Prefer a user-typed unit; otherwise borrow the one
+                            // the DataFlash schema records for the field.
+                            let unit_for = |field: &str| {
+                                user_unit
+                                    .clone()
+                                    .or_else(|| session.field_unit(&msg_type, field))
+                            };
+                            // A `field[*]` selection expands into one series per
+                            // array element; everything else stays a single series.
+                            let fields: Vec<(String, Option<String>)> = match s
+                                .field
+                                .strip_suffix("[*]")
+                            {
+                                Some(base) => (0..session
+                                    .field_array_len(&msg_type, base)
+                                    .unwrap_or(1))
+                                    .map(|i| {
+                                        let field = format!("{base}[{i}]");
+                                        let name = user_name.as_ref().map(|n| format!("{n}[{i}]"));
+                                        (field, name)
+                                    })
+                                    .collect(),
+                                None => vec![(s.field.clone(), user_name.clone())],
+                            };
+                            fields
+                                .into_iter()
+                                .map(|(field, name)| SeriesDef {
+                                    sysid,
+                                    compid,
+                                    msg_type: msg_type.clone(),
+                                    unit: unit_for(&field),
+                                    field,
+                                    name,
+                                    source,
+                                })
+                                .collect::<Vec<_>>()
                         })
                         .collect();
                     let plot_def = PlotDef { name, series, show_marks: editor.show_marks };

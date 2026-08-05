@@ -58,10 +58,30 @@ pub struct SeriesData {
     pub y_max: f64,
 }
 
+/// Split a field reference into its base name and an optional array index:
+/// `"rc_channels[3]"` -> `("rc_channels", Some(3))`, a plain name -> `(name,
+/// None)`. Only a trailing `[<usize>]` is recognized; anything else (a bare
+/// name, or the `[*]` "all elements" marker, or malformed input) yields the
+/// whole string as the base with no index.
+pub fn parse_field_index(field: &str) -> (&str, Option<usize>) {
+    let Some(open) = field.rfind('[') else {
+        return (field, None);
+    };
+    let Some(inner) = field[open + 1..].strip_suffix(']') else {
+        return (field, None);
+    };
+    match inner.parse::<usize>() {
+        Ok(idx) => (&field[..open], Some(idx)),
+        Err(_) => (field, None),
+    }
+}
+
 /// Extract `[timestamp_us, value]` points for a series: scans entries
 /// matching the series' id/type, decodes each, and coerces the named field
-/// to `f64`. Entries where the field is missing or not numeric (e.g. enum
-/// fields, which serialize as `{"type": "..."}`) are skipped.
+/// to `f64`. When the field name carries an array subscript (`field[i]`), the
+/// i-th element is read instead of the whole value. Entries where the field is
+/// missing, out of range, or not numeric (e.g. enum fields, which serialize as
+/// `{"type": "..."}`) are skipped.
 pub fn extract(session: &Session, series: &SeriesDef) -> SeriesData {
     let points: Vec<[f64; 2]> = session
         .entries
@@ -74,12 +94,17 @@ pub fn extract(session: &Session, series: &SeriesDef) -> SeriesData {
         })
         .filter_map(|e| {
             let value = session.decode_fields(e)?;
+            let (base, idx) = parse_field_index(&series.field);
             let field = value
                 .as_object()?
                 .iter()
-                .find(|(k, _)| k.eq_ignore_ascii_case(&series.field))?
+                .find(|(k, _)| k.eq_ignore_ascii_case(base))?
                 .1;
-            Some([e.timestamp_us as f64, field.as_f64()?])
+            let scalar = match idx {
+                Some(i) => field.as_array()?.get(i)?,
+                None => field,
+            };
+            Some([e.timestamp_us as f64, scalar.as_f64()?])
         })
         .collect();
     let points = decimate(points);
@@ -247,6 +272,18 @@ mod tests {
     }
 
     #[test]
+    fn parse_field_index_cases() {
+        assert_eq!(parse_field_index("x"), ("x", None));
+        assert_eq!(parse_field_index("x[0]"), ("x", Some(0)));
+        assert_eq!(parse_field_index("x[12]"), ("x", Some(12)));
+        // The "all elements" marker is not an index; it stays a base name.
+        assert_eq!(parse_field_index("x[*]"), ("x[*]", None));
+        // Malformed subscripts fall through unchanged.
+        assert_eq!(parse_field_index("x["), ("x[", None));
+        assert_eq!(parse_field_index("x[a]"), ("x[a]", None));
+    }
+
+    #[test]
     fn extract_skips_nonnumeric_fields() {
         let data = record(1_000_000, V2_HEARTBEAT_SYS1);
         let entries = tlog::parse(&data);
@@ -264,6 +301,46 @@ mod tests {
             source: None,
         };
         assert!(extract(&session, &series).points.is_empty());
+    }
+
+    #[test]
+    fn extract_reads_an_array_element() {
+        use mavlink::dialects::ardupilotmega::{MavMessage, MEMORY_VECT_DATA};
+
+        // MEMORY_VECT has a plain `value: [i8; 32]` field. Put a marker in slot
+        // 2 so we can tell which element was read.
+        let mut value = [0i8; 32];
+        value[2] = 30;
+        let msg =
+            MavMessage::MEMORY_VECT(MEMORY_VECT_DATA { address: 0, ver: 0, mavtype: 0, value });
+        let mut frame = Vec::new();
+        mavlink::write_v2_msg(
+            &mut frame,
+            mavlink::MavHeader { system_id: 1, component_id: 1, sequence: 0 },
+            &msg,
+        )
+        .unwrap();
+
+        let data = record(1_000_000, &frame);
+        let entries = tlog::parse(&data);
+        let session = Session::new("x".to_string(), data, entries, None);
+
+        let series = |field: &str| SeriesDef {
+            sysid: None,
+            compid: None,
+            msg_type: "MEMORY_VECT".to_string(),
+            field: field.to_string(),
+            name: None,
+            unit: None,
+            source: None,
+        };
+        // The subscript selects the indexed element...
+        assert_eq!(extract(&session, &series("value[2]")).points, vec![[1_000_000.0, 30.0]]);
+        assert_eq!(extract(&session, &series("value[0]")).points, vec![[1_000_000.0, 0.0]]);
+        // ...an out-of-range index skips the sample rather than panicking...
+        assert!(extract(&session, &series("value[99]")).points.is_empty());
+        // ...and the whole array (no subscript) is non-numeric, so skipped.
+        assert!(extract(&session, &series("value")).points.is_empty());
     }
 
     #[test]

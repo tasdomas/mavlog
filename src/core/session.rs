@@ -329,7 +329,10 @@ impl Session {
     /// The unit label a DataFlash schema records for a field, if any. Used to
     /// auto-fill a new plot series' unit. Always `None` for MAVLink logs.
     pub fn field_unit(&self, msg_type: &str, field: &str) -> Option<String> {
-        self.schema.as_ref()?.field_unit(msg_type, field)
+        // An array element (`field[i]`) inherits its parent field's unit, so
+        // strip any subscript before the schema lookup.
+        let (base, _) = crate::core::plot::parse_field_index(field);
+        self.schema.as_ref()?.field_unit(msg_type, base)
     }
 
     /// The detail-pane body for an entry: the decoded message fields, or a hex
@@ -373,19 +376,48 @@ impl Session {
         }
     }
 
-    /// Field names of a message type, from the first decodable sample in
-    /// the file.
-    pub fn field_options(&self, msg_type: &str) -> Vec<String> {
+    /// The decoded field object of the first decodable sample of a message
+    /// type, if any.
+    fn field_sample(&self, msg_type: &str) -> Option<serde_json::Map<String, serde_json::Value>> {
         self.entries
             .iter()
             .filter(|e| e.name == msg_type)
             .find_map(|e| self.decode_fields(e))
-            .and_then(|value| {
-                value
-                    .as_object()
-                    .map(|obj| obj.keys().filter(|k| *k != "type").cloned().collect())
-            })
-            .unwrap_or_default()
+            .and_then(|value| value.as_object().cloned())
+    }
+
+    /// Field names of a message type, from the first decodable sample in
+    /// the file. Array fields are expanded into one `field[i]` option per
+    /// element plus a `field[*]` "all elements" option.
+    pub fn field_options(&self, msg_type: &str) -> Vec<String> {
+        let Some(obj) = self.field_sample(msg_type) else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        for (key, value) in &obj {
+            if key == "type" {
+                continue;
+            }
+            match value.as_array() {
+                Some(arr) if !arr.is_empty() => {
+                    out.extend((0..arr.len()).map(|i| format!("{key}[{i}]")));
+                    out.push(format!("{key}[*]"));
+                }
+                _ => out.push(key.clone()),
+            }
+        }
+        out
+    }
+
+    /// Length of a message field's array in the first decodable sample, or
+    /// `None` if the field is absent or not an array. Used to expand a
+    /// `field[*]` "all elements" selection into concrete indices.
+    pub fn field_array_len(&self, msg_type: &str, field: &str) -> Option<usize> {
+        self.field_sample(msg_type)?
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(field))
+            .and_then(|(_, v)| v.as_array())
+            .map(Vec::len)
     }
 
     /// Dropdown option label: 0 is "any", the rest map into id_options.
