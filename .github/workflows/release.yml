@@ -41,11 +41,21 @@ jobs:
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Package (unix)
-        if: runner.os != 'Windows'
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
         run: |
           tar -C target/${{ matrix.target }}/release -czf \
             "mavlog-${{ github.ref_name }}-${{ matrix.target }}.tar.gz" mavlog
+
+      - name: Package (macOS .app)
+        if: runner.os == 'macOS'
+        run: |
+          packaging/macos/bundle.sh \
+            "target/${{ matrix.target }}/release/mavlog" dist "${{ github.ref_name }}"
+          # ditto preserves the bundle structure and metadata; the resulting
+          # zip expands back to mavlog.app on the user's machine.
+          ditto -c -k --keepParent dist/mavlog.app \
+            "mavlog-${{ github.ref_name }}-${{ matrix.target }}.zip"
 
       - name: Package (windows)
         if: runner.os == 'Windows'

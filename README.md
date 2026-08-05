@@ -201,6 +201,22 @@ sudo apt install libxkbcommon-dev libx11-dev libgtk-3-dev
 
 macOS and Windows need no extra system packages.
 
+### macOS app bundle
+
+`cargo build` produces a bare executable. Double-clicking it in Finder (or
+running it from a shell) launches it through Terminal.app, so a stray terminal
+window appears next to the GUI. To get a proper double-click-to-launch app with
+no terminal, wrap it in a `.app` bundle:
+
+```sh
+make bundle
+```
+
+This writes `dist/mavlog.app` (release build, ad-hoc signed). `open
+dist/mavlog.app` to run it. See [`packaging/macos/README.md`](packaging/macos/README.md)
+for adding an icon and for Developer ID signing / notarization. Tagged releases
+publish a zipped `mavlog.app` for both Apple Silicon and Intel.
+
 ## Testing
 
 ```sh
