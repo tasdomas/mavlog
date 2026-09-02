@@ -47,6 +47,33 @@ Two frontends share one core:
 [eframe]: https://github.com/emilk/egui/tree/master/crates/eframe
 [ratatui]: https://ratatui.rs
 
+## Install
+
+Prebuilt binaries for macOS, Linux and Windows are published on the
+[Releases](https://github.com/tasdomas/mavlog/releases/latest) page. Grab the
+asset for your platform, or [build from source](#building).
+
+### macOS
+
+Download the `apple-darwin` `.zip` for your CPU — `aarch64` for Apple Silicon,
+`x86_64` for Intel — and unzip it to get `mavlog.app`.
+
+The app is ad-hoc signed but **not** notarized, so Gatekeeper quarantines it on
+download and refuses to open it ("mavlog is damaged" / "cannot be opened").
+Remove the quarantine attribute once, then launch it normally:
+
+```sh
+xattr -dr com.apple.quarantine /path/to/mavlog.app
+open /path/to/mavlog.app
+```
+
+After that, double-click it from Finder like any other app. (Alternatively,
+right-click the app → **Open** the first time and confirm the prompt.)
+
+> Make sure you download **v0.0.2 or later** — earlier releases shipped a bare
+> executable, which Finder runs through Terminal.app, so a stray terminal window
+> appears next to the GUI.
+
 ## Usage
 
 ```sh
@@ -213,9 +240,12 @@ make bundle
 ```
 
 This writes `dist/mavlog.app` (release build, ad-hoc signed). `open
-dist/mavlog.app` to run it. See [`packaging/macos/README.md`](packaging/macos/README.md)
-for adding an icon and for Developer ID signing / notarization. Tagged releases
-publish a zipped `mavlog.app` for both Apple Silicon and Intel.
+dist/mavlog.app` to run it. A locally built bundle carries no quarantine
+attribute, so it launches directly; a bundle downloaded from a release does (see
+[Install](#macos) for the one-time `xattr` step). See
+[`packaging/macos/README.md`](packaging/macos/README.md) for adding an icon and
+for Developer ID signing / notarization. Tagged releases publish a zipped
+`mavlog.app` for both Apple Silicon and Intel.
 
 ## Testing
 
