@@ -5,10 +5,9 @@ use std::ops::Range;
 
 use mavlink::{dialects::ardupilotmega::MavMessage, MavlinkVersion, Message};
 
-use crate::core::entry::{EntryKind, LogEntry, LogSourceId};
+use mavlink_tlog::{TlogSlice, Version};
 
-pub const MAGIC_V1: u8 = 0xFE;
-pub const MAGIC_V2: u8 = 0xFD;
+use crate::core::entry::{EntryKind, LogEntry, LogSourceId};
 
 /// Decode the full MAVLink message for an entry parsed from `data`. Returns
 /// `None` for non-MAVLink entries or payloads the dialect can't parse.
@@ -37,62 +36,30 @@ pub fn hex_dump(payload: &[u8]) -> String {
 /// forward one byte at a time until a plausible record is found.
 pub fn parse(data: &[u8]) -> Vec<LogEntry> {
     let mut entries = Vec::new();
-    let mut pos = 0usize;
+    let mut records = TlogSlice::new(data);
 
-    while pos + 8 < data.len() {
-        let frame = &data[pos + 8..];
-        let parsed = match frame[0] {
-            MAGIC_V1 => parse_v1(frame),
-            MAGIC_V2 => parse_v2(frame),
-            _ => None,
+    while let Some(rec) = records.next() {
+        let frame_start = records.position() - rec.frame.len();
+        let (version, start) = match rec.frame.version() {
+            Version::V1 => (MavlinkVersion::V1, 6),
+            Version::V2 => (MavlinkVersion::V2, 10),
         };
-        let Some((mut entry, frame_len)) = parsed else {
-            pos += 1;
-            continue;
-        };
-        entry.timestamp_us = u64::from_be_bytes(data[pos..pos + 8].try_into().unwrap());
+        let payload = start..start + rec.frame.payload_len() as usize;
+        let mut entry = entry(
+            version,
+            rec.frame.sys_id(),
+            rec.frame.comp_id(),
+            rec.frame.msg_id(),
+            rec.frame.as_bytes(),
+            payload,
+        );
+        entry.timestamp_us = rec.timestamp_us;
         // Rebase the payload range from frame-relative to buffer-relative.
-        entry.payload.start += pos + 8;
-        entry.payload.end += pos + 8;
+        entry.payload.start += frame_start;
+        entry.payload.end += frame_start;
         entries.push(entry);
-        pos += 8 + frame_len;
     }
     entries
-}
-
-/// v1 frame: STX len seq sys comp msgid payload[len] crc[2]
-fn parse_v1(frame: &[u8]) -> Option<(LogEntry, usize)> {
-    if frame.len() < 8 {
-        return None;
-    }
-    let len = frame[1] as usize;
-    let total = 6 + len + 2;
-    if frame.len() < total {
-        return None;
-    }
-    let msg_id = frame[5] as u32;
-    Some((
-        entry(MavlinkVersion::V1, frame[3], frame[4], msg_id, frame, 6..6 + len),
-        total,
-    ))
-}
-
-/// v2 frame: STX len incompat compat seq sys comp msgid[3] payload[len] crc[2] [sig[13]]
-fn parse_v2(frame: &[u8]) -> Option<(LogEntry, usize)> {
-    if frame.len() < 12 {
-        return None;
-    }
-    let len = frame[1] as usize;
-    let signed = frame[2] & 0x01 != 0;
-    let total = 10 + len + 2 + if signed { 13 } else { 0 };
-    if frame.len() < total {
-        return None;
-    }
-    let msg_id = u32::from_le_bytes([frame[7], frame[8], frame[9], 0]);
-    Some((
-        entry(MavlinkVersion::V2, frame[5], frame[6], msg_id, frame, 10..10 + len),
-        total,
-    ))
 }
 
 fn entry(
@@ -128,12 +95,12 @@ mod tests {
         rec
     }
 
-    // HEARTBEAT (id 0, 9-byte payload) frames; CRC bytes are not checked.
+    // HEARTBEAT (id 0, 9-byte payload) frames with valid checksums.
     const V1_HEARTBEAT: &[u8] = &[
-        0xFE, 9, 0, 1, 1, 0, 0, 0, 0, 0, 2, 3, 81, 4, 3, 0, 0,
+        0xFE, 9, 0, 1, 1, 0, 0, 0, 0, 0, 2, 3, 81, 4, 3, 125, 221,
     ];
     const V2_HEARTBEAT: &[u8] = &[
-        0xFD, 9, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 2, 3, 81, 4, 3, 0, 0,
+        0xFD, 9, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 2, 3, 81, 4, 3, 247, 144,
     ];
 
     #[test]
@@ -177,5 +144,17 @@ mod tests {
         let entries = parse(&record(1, &frame));
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].name, "UNKNOWN(16711679)");
+    }
+
+    #[test]
+    fn skips_frame_with_bad_crc() {
+        let mut damaged = V2_HEARTBEAT.to_vec();
+        damaged[14] ^= 0x01;
+        let mut data = record(1_000_000, &damaged);
+        data.extend(record(2_000_000, V2_HEARTBEAT));
+
+        let entries = parse(&data);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].timestamp_us, 2_000_000);
     }
 }

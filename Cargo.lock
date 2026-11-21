@@ -2287,6 +2287,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "mavlink-tlog"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "da742b92f6820a5de512a96a83911a29b4621b61370a2cec0baff8651a48a07b"
+
+[[package]]
 name = "mavlog"
 version = "0.1.0"
 dependencies = [
@@ -2298,6 +2304,7 @@ dependencies = [
  "egui_plot",
  "image",
  "mavlink",
+ "mavlink-tlog",
  "objc2 0.5.2",
  "objc2-app-kit 0.2.2",
  "objc2-foundation 0.2.2",

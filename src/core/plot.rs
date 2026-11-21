@@ -240,10 +240,10 @@ mod tests {
     // v2 HEARTBEAT frames (msg id 0) differing only by sysid (byte index 4),
     // decoding to mavlink_version = 3 (see tlog::tests::decodes_payload_fields).
     const V2_HEARTBEAT_SYS1: &[u8] = &[
-        0xFD, 9, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 2, 3, 81, 4, 3, 0, 0,
+        0xFD, 9, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 2, 3, 81, 4, 3, 247, 144,
     ];
     const V2_HEARTBEAT_SYS2: &[u8] = &[
-        0xFD, 9, 0, 0, 1, 2, 1, 0, 0, 0, 0, 0, 0, 0, 2, 3, 81, 4, 3, 0, 0,
+        0xFD, 9, 0, 0, 1, 2, 1, 0, 0, 0, 0, 0, 0, 0, 2, 3, 81, 4, 3, 137, 72,
     ];
 
     fn record(timestamp_us: u64, frame: &[u8]) -> Vec<u8> {

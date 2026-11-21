@@ -62,7 +62,8 @@ mod tests {
         payload.extend(boot_ms.to_le_bytes());
         let mut frame = vec![0xFD, payload.len() as u8, 0, 0, 0, 1, 1, 2, 0, 0];
         frame.extend(payload);
-        frame.extend([0, 0]); // crc
+        let crc = mavlink_tlog::frame::crc_accumulate(137, mavlink_tlog::crc16(&frame[1..]));
+        frame.extend(crc.to_le_bytes());
         frame
     }
 
@@ -82,7 +83,7 @@ mod tests {
     #[test]
     fn no_system_time_yields_none() {
         // A lone HEARTBEAT (id 0), no SYSTEM_TIME.
-        let hb = [0xFD, 9, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 2, 3, 81, 4, 3, 0, 0];
+        let hb = [0xFD, 9, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 2, 3, 81, 4, 3, 247, 144];
         let data = record(1, &hb);
         let entries = tlog::parse(&data);
         assert_eq!(boot_to_unix_offset(&entries, &data), None);

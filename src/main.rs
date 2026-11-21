@@ -226,8 +226,8 @@ mod tests {
         st_payload.extend(0u32.to_le_bytes());
         let mut st = vec![0xFD, st_payload.len() as u8, 0, 0, 0, 1, 1, 2, 0, 0];
         st.extend(&st_payload);
-        st.extend([0, 0]);
-        let hb: &[u8] = &[0xFD, 9, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 2, 3, 81, 4, 3, 0, 0];
+        st.extend(mavlink_tlog::frame::crc_accumulate(137, mavlink_tlog::crc16(&st[1..])).to_le_bytes());
+        let hb: &[u8] = &[0xFD, 9, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 2, 3, 81, 4, 3, 247, 144];
         let mut tlog = tlog_record(t0, &st);
         tlog.extend(tlog_record(t0, hb));
         tlog.extend(tlog_record(t0 + 2_000_000, hb));
@@ -313,8 +313,8 @@ mod tests {
         st_payload.extend(0u32.to_le_bytes());
         let mut st = vec![0xFD, st_payload.len() as u8, 0, 0, 0, 1, 1, 2, 0, 0];
         st.extend(&st_payload);
-        st.extend([0, 0]);
-        let hb: &[u8] = &[0xFD, 9, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 2, 3, 81, 4, 3, 0, 0];
+        st.extend(mavlink_tlog::frame::crc_accumulate(137, mavlink_tlog::crc16(&st[1..])).to_le_bytes());
+        let hb: &[u8] = &[0xFD, 9, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 2, 3, 81, 4, 3, 247, 144];
         let mut tlog = trec(t0, &st);
         tlog.extend(trec(t0, hb));
 

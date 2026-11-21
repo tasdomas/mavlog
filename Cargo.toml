@@ -12,6 +12,7 @@ egui_extras = "0.35.0"
 egui_plot = "0.36.0"
 image = { version = "0.25", default-features = false, features = ["png"] }
 mavlink = { version = "0.18.0", default-features = false, features = ["std", "dialect-ardupilotmega", "serde"] }
+mavlink-tlog = "0.1.2"
 ratatui = "0.30.2"
 rfd = "0.17.2"
 serde = { version = "1.0.228", features = ["derive"] }
